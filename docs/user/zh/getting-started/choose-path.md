@@ -10,7 +10,7 @@ description: 从配置 Agent 私有云网络开始，找到最短且可验证的
 
 | 你的目标 | 从这里开始 | 完成标志 |
 | --- | --- | --- |
-| 在电脑上体验完整系统 | [电脑虚拟机](desktop-vm.md)（镜像发布与开机验收待完成） | LuCI 可登录，Agent 注册和认证调用成功 |
+| 在电脑上体验完整系统 | [电脑虚拟机](desktop-vm.md)（需准备匹配镜像的体验包） | LuCI 可登录，Agent 注册和认证调用成功 |
 | 配置 Agent 私有云网络 | [安装与构建](install.md) → [配置 Agent 私有云网络](quick-setup.md) | 第一个私有云节点 Healthy，Agent 可注册和调用 |
 | 发布第一个 Python Agent | [构建第一个 Agent](https://nexilume-ai.github.io/nexus-docs/sdk/quickstart/first-agent) | `demo.echo` 出现在 Capability Routes |
 | 从 Python 调用能力 | [调用第一个 Agent](https://nexilume-ai.github.io/nexus-docs/sdk/quickstart/call-first-agent) | 终端收到 JSON 响应 |

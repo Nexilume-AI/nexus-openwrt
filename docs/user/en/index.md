@@ -11,7 +11,7 @@ Nexus Agent Router turns OpenWrt into an Agent private-cloud node. Agents publis
 
 ## Configure an Agent private cloud network
 
-For a computer-based experience, see the [full OpenWrt VM](getting-started/desktop-vm.md). The launcher and build recipe are available; a preinstalled image and boot acceptance remain pending. Physical routers retain their device installation path.
+For a computer-based experience, see the [full OpenWrt VM](getting-started/desktop-vm.md). Prepare a bundle containing the matching VHDX before starting; source-only checkouts require image building first. Physical routers use the device installation path.
 
 1. [Choose a deployment path](getting-started/choose-path.md), then [create the trust domain and first node](getting-started/quick-setup.md).
 2. Use the [communication mode selector](communication/model.md) to choose address ownership, data path, and discovery.

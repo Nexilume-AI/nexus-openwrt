@@ -8,24 +8,44 @@ description: 用独立 Hyper-V 虚拟机运行 OpenWrt、LuCI 和 Nexus Agent Ro
 
 不用先准备路由器硬件：电脑体验路径运行完整 OpenWrt 虚拟机，保留 LuCI、Agent Router 和首次配置向导。生产设备仍按[安装与构建](install.md)部署，支持范围见[支持矩阵](support-matrix.md)。
 
-:::info 当前交付状态
-启动脚本、镜像制作流程和离线校验测试已经提供。**预装桌面镜像尚未发布，完整虚拟机开机验收待完成**，因此暂时不是可直接下载的一键安装包。已有 Hyper-V 路由器测试不能代替新桌面镜像验收。
-:::
-
 ## 两种部署路径
 
-| 路径 | 适合用途 | 交付方式 |
+| 路径 | 适合用途 | 需要准备 |
 | --- | --- | --- |
 | OpenWrt 设备 | 持续运行、真实网络与设备集成 | 匹配设备的固件或 feed 软件包 |
 | 电脑虚拟机 | 学习、演示、开发和单节点调用验证 | 干净预装 VHDX、校验清单和启动脚本 |
 
-首个电脑启动器面向启用 Hyper-V 的 Windows x86-64，需 Hyper-V PowerShell 模块和首次创建所需的管理员权限。默认 1 GiB 内存、2 个 vCPU。Linux/macOS、其他虚拟化软件和无 Hyper-V 环境暂未提供一键启动器。
+本指南使用 Windows x86-64 与 Hyper-V，虚拟机默认分配 1 GiB 内存、2 个 vCPU。电脑需启用硬件虚拟化、Hyper-V 及其 PowerShell 管理模块；创建和管理虚拟机时使用管理员 PowerShell。此启动器仅适用于 Hyper-V。
 
-## 拿到体验包后的启动步骤
+## 1. 准备环境和体验包
 
-维护者按源码中的 `deploy/desktop/BUILD.md` 制作并验收干净镜像。体验包应包含 `desktop-image.json`、匹配的 VHDX、`start-nexus-openwrt.ps1` 和 README；只有源码脚本时不能直接启动。
+在管理员 PowerShell 中检查 Hyper-V 和 SSH 工具：
 
-核对发布来源和校验值后，在解压目录的管理员 PowerShell 中执行：
+```powershell
+Get-Command Get-VM, Get-VMSwitch, ssh.exe
+Get-VMSwitch
+```
+
+缺少 Hyper-V 命令时，在 Windows“启用或关闭 Windows 功能”中启用 Hyper-V 和管理工具，按系统提示重启后重新检查。IPv6 配置脚本还需要 Windows OpenSSH 客户端。
+
+准备包含以下文件的体验包，并解压到本地普通目录：
+
+```text
+桌面体验包/
+  desktop-image.json
+  <与清单匹配的镜像>.vhdx
+  start-nexus-openwrt.ps1
+  configure-ipv6.ps1
+  README.md
+```
+
+`desktop-image.json` 记录镜像文件名、SHA-256 和网络配置。**源码 ZIP 不包含 VHDX**：只有源码时，先按仓库 `deploy/desktop/BUILD.md` 构建镜像，再用 `deploy/desktop/prepare-bundle.py` 生成体验包。不要把正在使用的路由器磁盘当作发布镜像，也不要仅将任意 VHDX 改名后套用清单。
+
+为原始镜像及独立运行副本预留磁盘空间。使用前核对体验包来源和提供者公布的校验值；脚本内部的校验只能确认文件与清单一致。
+
+## 2. 检查并启动
+
+在解压目录打开管理员 PowerShell，先检查体验包，再启动：
 
 ```powershell
 .\start-nexus-openwrt.ps1 -Action Check
@@ -34,7 +54,19 @@ description: 用独立 Hyper-V 虚拟机运行 OpenWrt、LuCI 和 Nexus Agent Ro
 
 等待系统启动，打开 [LuCI 管理页](http://192.168.246.1/)。先设置独立 root 密码，再进入 **状态 → Agent Routing → User mode**，按[创建信任域和第一个节点](quick-setup.md)初始化。设备身份、密钥和信任域在本次安装中创建，镜像不能预置共用凭据。
 
+首次启动会创建专用交换机和虚拟机，再从原始镜像复制独立运行磁盘。不要修改原始镜像。若等待后页面仍无法打开，在 Hyper-V 管理器中打开 `Nexus-OpenWrt-Desktop` 的控制台查看启动信息。
+
 默认安装目录为 `%LOCALAPPDATA%\Nexus\OpenWrtDesktop`，镜像会复制到独立可写磁盘。首次启动可用 `-InstallationDirectory` 指定新目录，之后所有命令使用同一路径。
+
+例如首次选择自己的安装目录和资源：
+
+```powershell
+.\start-nexus-openwrt.ps1 -InstallationDirectory 'D:\NexusDesktop' -MemoryMiB 2048 -Processors 2
+```
+
+该命令是首次启动的替代方式；目录应为新的专用目录。后续命令都加上相同的 `-InstallationDirectory 'D:\NexusDesktop'`，不要把已有安装误当成新的实例。下面示例使用默认目录。
+
+## 3. 查看状态、停止和再次启动
 
 ```powershell
 .\start-nexus-openwrt.ps1 -Action Status
@@ -44,15 +76,17 @@ description: 用独立 Hyper-V 虚拟机运行 OpenWrt、LuCI 和 Nexus Agent Ro
 
 Stop 请求正常关机并保留数据；不会自动强制断电。Check 只验证发布镜像和配置，不代表业务服务健康。
 
-## 电脑与虚拟机的网络
+## 4. 连接电脑上的 Agent
 
 启动器创建专用 Internal 交换机：电脑管理地址 `192.168.246.2/24`，虚拟机 `192.168.246.1/24`。默认不接 WAN、不桥接物理网卡，不向主机添加默认网关/DNS，也不由虚拟机分发 DHCP/RA。
 
 在电脑运行 Python Agent 时，按 SDK 指南使用可由虚拟机访问的 `192.168.246.2` 监听地址；只监听 `127.0.0.1` 无法被虚拟机回调。需要主机防火墙规则时，仅放行选定 Agent 端口和虚拟机来源地址。
 
-先完成本机注册和调用，再根据体验包 README 显式添加 NAT WAN 适配器，以测试 Cloud/Relay。先设置密码，再在 LuCI 按新网卡的 MAC 识别接口并配置 DHCP-client/WAN 防火墙区域。NAT 出站连接不代表公网 IPv6 入站或真实 LAN 发现已通过测试。
+在 LuCI User mode 启用 **Agent services**，然后按[发布与调用 Agent API](../guides/publish-api.md)在电脑启动 Agent 并发起调用。依次确认 Local Agents 中有租约、Capability Routes 中有能力，以及调用方收到实际响应。刚启动时空列表正常，不能只用 VM 的 Running 状态判断服务可用。
 
-## 一键配置 IPv6
+默认隔离网络不能访问互联网。需要 Cloud/Relay 或下载软件包时，先设置 root 密码，再按下一节选择提供上游网络的交换机；保留专用管理 LAN。
+
+## 5. 配置本地 IPv6 与上游网络
 
 启动器同时配置专用网络的 IPv6：虚拟机 `fd6e:6578:7573:246::1/64`，电脑 `fd6e:6578:7573:246::2/64`。可访问 [IPv6 LuCI 管理页](http://[fd6e:6578:7573:246::1]/)。这些是本地 ULA 地址，不是公网地址。
 
@@ -75,18 +109,28 @@ Get-VMSwitch
 
 脚本输出 `wan6` 实际状态；地址或前缀为空表示上游尚未分配，不能视为公网 IPv6 配置成功。NAT 交换机不保证提供公网 IPv6。此命令不会向管理 LAN 广播公网前缀；公网 Agent 入站还需相应服务配置及外部连通性验证。
 
-## 验证与排错
+## 6. 连接检查与排错
 
 - LuCI 可登录，Agent Router 页面加载，首次设置完成。
 - Python Agent 的能力出现在 Capability Routes，认证调用返回正确结果。
 - 重启后配置保留，正常 Stop/Start 可用；电脑原有联网方式未改变。
-- **缺少镜像**：等待已验收体验包，或由维护者使用 BUILD.md 制作；不要复制正在使用的路由器磁盘。
+- **缺少清单或镜像**：核对本节的体验包文件列表。源码目录需要先完成镜像构建和打包；`Check` 不会下载或生成镜像。
 - **权限不足**：确认管理员 PowerShell 和 Hyper-V 管理权限。
 - **网段/名称冲突**：启动器拒绝覆盖，不能通过删除现有路由来绕过；该固定配置一次只支持一个体验实例。
 - **创建中断**：保留对象和状态用于诊断，未完成配置的 VM 不会自动继续启动。
 
-该方案暂不承担生产吞吐量、公网 IPv6、硬件驱动或多机互联的验收结论。
+电脑上可进一步检查管理连接：
 
-## 开源发布范围
+```powershell
+Test-NetConnection 192.168.246.1 -Port 80
+Test-NetConnection 192.168.246.1 -Port 22
+Test-NetConnection 'fd6e:6578:7573:246::1' -Port 80
+```
 
-OpenWrt 应独立于 Cloud 社区版发布。公开源码只包含审查过的路由组件、构建脚本及对应文档，不能直接上传混合工作目录中的测试磁盘、密钥、运行日志或企业版文档。Nexus 自有源码遵循项目 LICENSE/NOTICE；镜像内 OpenWrt 和第三方软件保留各自许可证和对应源码要求。
+管理端口连通只证明可以访问虚拟机；Agent 调用仍需验证注册、认证和回调地址。上游没有分配 IPv6 时，本地 ULA 管理仍可使用。
+
+## 7. 保留数据或移除虚拟机
+
+`Stop` 会保留运行磁盘，之后 `Start` 继续使用原来的配置。需要迁移或重装时，先正常关机并备份安装目录中的运行磁盘和 `desktop-state.json`。
+
+移除时，在 Hyper-V 管理器确认目标为 `Nexus-OpenWrt-Desktop`，移除该虚拟机及它专用的 Internal 交换机；确认不再需要数据后再删除对应安装目录。不要删除其他虚拟机、交换机或电脑现有路由。

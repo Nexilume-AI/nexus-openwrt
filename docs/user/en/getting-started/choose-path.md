@@ -10,7 +10,7 @@ You do not need to read the documentation front to back. Choose the closest goal
 
 | Goal | Start here | Done when |
 | --- | --- | --- |
-| Try the full system on a computer | [Desktop VM](desktop-vm.md) (image publication and boot acceptance pending) | LuCI login, Agent registration and authenticated invocation succeed |
+| Try the full system on a computer | [Desktop VM](desktop-vm.md) (requires a bundle with a matching image) | LuCI login, Agent registration and authenticated invocation succeed |
 | Configure an Agent private cloud network | [Install and build](install.md) → [Configure the private cloud](quick-setup.md) | The first node is Healthy and an Agent can register and be invoked |
 | Publish a Python Agent | [Build your first Agent](https://nexilume-ai.github.io/nexus-docs/en/sdk/quickstart/first-agent) | `demo.echo` appears under Capability Routes |
 | Invoke a capability from Python | [Call your first Agent](https://nexilume-ai.github.io/nexus-docs/en/sdk/quickstart/call-first-agent) | The terminal receives a JSON response |

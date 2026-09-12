@@ -11,7 +11,7 @@ Nexus Agent Router 把 OpenWrt 变成 Agent 私有云的网络节点：Agent 发
 
 ## 配置 Agent 私有云网络
 
-电脑体验入口见[完整 OpenWrt 虚拟机](getting-started/desktop-vm.md)。当前提供启动器与制作流程，预装镜像和开机验收待完成；真实路由器继续使用设备安装路径。
+电脑体验入口见[完整 OpenWrt 虚拟机](getting-started/desktop-vm.md)。使用前需准备包含匹配 VHDX 的体验包；只有源码时请先完成镜像制作。真实路由器使用设备安装路径。
 
 1. [选择部署路径](getting-started/choose-path.md)，再[创建信任域和第一个节点](getting-started/quick-setup.md)。
 2. 用[通信模式选择器](communication/model.md)决定地址、路径和发现机制。
