@@ -1,0 +1,216 @@
+#!/bin/sh
+
+. /lib/functions.sh
+
+STATE_FILE=/var/run/nexus-agent-public-ipv6.json
+
+valid_name() {
+	case "$1" in
+		''|*[!A-Za-z0-9_.-]*) return 1 ;;
+	esac
+	[ "${#1}" -lt 32 ]
+}
+
+is_global_unicast() {
+	local value
+	value="$(printf '%s' "$1" | tr 'A-F' 'a-f' | sed 's/%.*$//')"
+	case "$value" in
+		2*|3*) ;;
+		*) return 1 ;;
+	esac
+	case "$value" in
+		2001:db8:*|2001:db8::) return 1 ;;
+	esac
+	return 0
+}
+
+valid_prefix_text() {
+	local address mask
+	address="${1%/*}"
+	mask="${1##*/}"
+	[ "$address" != "$1" ] || return 1
+	is_global_unicast "$address" || return 1
+	case "$mask" in
+		48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64) ;;
+		*) return 1 ;;
+	esac
+}
+
+network_status() {
+	valid_name "$1" || return 1
+	ubus -S call "network.interface.$1" status 2>/dev/null
+}
+
+interface_names() {
+	local object logical seen
+	seen=' '
+	for logical in wan6 wan; do
+		printf '%s\n' "$logical"
+		seen="$seen$logical "
+	done
+	for object in $(ubus -S list 'network.interface.*' 2>/dev/null); do
+		logical="${object#network.interface.}"
+		valid_name "$logical" || continue
+		case "$seen" in *" $logical "*) continue ;; esac
+		printf '%s\n' "$logical"
+		seen="$seen$logical "
+	done
+}
+
+detect_routed_prefix() {
+	local logical status up index address mask prefix
+	for logical in $(interface_names); do
+		status="$(network_status "$logical")" || continue
+		up="$(printf '%s' "$status" | jsonfilter -e '@.up' 2>/dev/null)"
+		[ "$up" = true ] || [ "$up" = 1 ] || continue
+		index=0
+		while [ "$index" -lt 32 ]; do
+			address="$(printf '%s' "$status" | jsonfilter -e "@['ipv6-prefix'][$index].address" 2>/dev/null)"
+			mask="$(printf '%s' "$status" | jsonfilter -e "@['ipv6-prefix'][$index].mask" 2>/dev/null)"
+			prefix="$address/$mask"
+			if valid_prefix_text "$prefix"; then
+				printf '%s|%s|%s\n' "$prefix" "$logical" ''
+				return 0
+			fi
+			index=$((index + 1))
+		done
+	done
+	return 1
+}
+
+detect_onlink_prefix() {
+	local requested logical status up device index address mask prefix interfaces
+	requested="$1"
+	[ -z "$requested" ] && interfaces="$(interface_names)" || interfaces="$requested"
+	for logical in $interfaces; do
+		status="$(network_status "$logical")" || continue
+		up="$(printf '%s' "$status" | jsonfilter -e '@.up' 2>/dev/null)"
+		[ "$up" = true ] || [ "$up" = 1 ] || continue
+		device="$(printf '%s' "$status" | jsonfilter -e '@.l3_device' 2>/dev/null)"
+		[ -n "$device" ] || device="$(printf '%s' "$status" | jsonfilter -e '@.device' 2>/dev/null)"
+		valid_name "$device" || continue
+		index=0
+		while [ "$index" -lt 32 ]; do
+			address="$(printf '%s' "$status" | jsonfilter -e "@['ipv6-address'][$index].address" 2>/dev/null)"
+			mask="$(printf '%s' "$status" | jsonfilter -e "@['ipv6-address'][$index].mask" 2>/dev/null)"
+			prefix="$address/$mask"
+			if [ "$mask" = 64 ] && valid_prefix_text "$prefix" && \
+				ip -6 route show exact "$prefix" dev "$device" 2>/dev/null | grep -q .; then
+				printf '%s|%s|%s\n' "$prefix" "$logical" "$device"
+				return 0
+			fi
+			index=$((index + 1))
+		done
+	done
+	return 1
+}
+
+write_state() {
+	local requested ready effective prefix network device code old_key old_generation
+	local key generation temporary
+	requested="$1"; ready="$2"; effective="$3"; prefix="$4"
+	network="$5"; device="$6"; code="$7"
+	old_key=''
+	old_generation=0
+	if [ -s "$STATE_FILE" ]; then
+		old_key="$(jsonfilter -i "$STATE_FILE" -e '@.fingerprint' 2>/dev/null)"
+		old_generation="$(jsonfilter -i "$STATE_FILE" -e '@.generation' 2>/dev/null)"
+	fi
+	case "$old_generation" in ''|*[!0-9]*) old_generation=0 ;; esac
+	key="$requested|$ready|$effective|$prefix|$network|$device|$code"
+	if [ "$key" = "$old_key" ]; then generation="$old_generation"; else generation=$((old_generation + 1)); fi
+	mkdir -p /var/run
+	temporary="$STATE_FILE.$$"
+	printf '{"schema_version":1,"requested_mode":"%s","ready":%s,"effective_mode":"%s","prefix":"%s","upstream_network":"%s","upstream_device":"%s","code":"%s","generation":%s,"fingerprint":"%s"}\n' \
+		"$requested" "$ready" "$effective" "$prefix" "$network" "$device" \
+		"$code" "$generation" "$key" >"$temporary" || return 1
+	chmod 0644 "$temporary"
+	mv -f "$temporary" "$STATE_FILE"
+	cat "$STATE_FILE"
+}
+
+resolve() {
+	local enabled requested configured_prefix configured_network result prefix network device status
+	config_load agent
+	config_get_bool enabled main public_ipv6_enabled 1
+	config_get requested main public_ipv6_mode auto
+	config_get configured_prefix main public_ipv6_prefix ''
+	config_get configured_network main public_ipv6_upstream_interface wan6
+	case "$requested" in
+		auto|routed-prefix|upstream-relay) ;;
+		*) write_state invalid false '' '' '' '' INVALID_MODE; return 2 ;;
+	esac
+	if [ "$enabled" -ne 1 ]; then
+		write_state "$requested" false '' '' '' '' DISABLED
+		return 0
+	fi
+	case "$requested" in
+		auto)
+			result="$(detect_routed_prefix)" && {
+				IFS='|' read -r prefix network device <<EOF
+$result
+EOF
+				write_state auto true routed-prefix "$prefix" "$network" '' READY
+				return 0
+			}
+			result="$(detect_onlink_prefix)" && {
+				IFS='|' read -r prefix network device <<EOF
+$result
+EOF
+				write_state auto true upstream-relay "$prefix" "$network" "$device" READY
+				return 0
+			}
+			write_state auto false '' '' '' '' WAITING_FOR_GLOBAL_IPV6
+			;;
+		routed-prefix)
+			if valid_prefix_text "$configured_prefix"; then
+				write_state routed-prefix true routed-prefix "$configured_prefix" '' '' READY
+			else
+				write_state routed-prefix false '' '' '' '' INVALID_OR_MISSING_PREFIX
+			fi
+			;;
+		upstream-relay)
+			valid_name "$configured_network" || {
+				write_state upstream-relay false '' '' '' '' INVALID_UPSTREAM_INTERFACE
+				return 0
+			}
+			status="$(network_status "$configured_network")" || {
+				write_state upstream-relay false '' '' "$configured_network" '' UPSTREAM_INTERFACE_UNAVAILABLE
+				return 0
+			}
+			device="$(printf '%s' "$status" | jsonfilter -e '@.l3_device' 2>/dev/null)"
+			[ -n "$device" ] || device="$(printf '%s' "$status" | jsonfilter -e '@.device' 2>/dev/null)"
+			valid_name "$device" || {
+				write_state upstream-relay false '' '' "$configured_network" '' UPSTREAM_INTERFACE_UNAVAILABLE
+				return 0
+			}
+			result="$(detect_onlink_prefix "$configured_network")" || {
+				write_state upstream-relay false '' '' "$configured_network" "$device" UPSTREAM_IPV6_UNAVAILABLE
+				return 0
+			}
+			IFS='|' read -r prefix network _ <<EOF
+$result
+EOF
+			if [ -n "$configured_prefix" ]; then
+				valid_prefix_text "$configured_prefix" || {
+					write_state upstream-relay false '' '' "$configured_network" "$device" INVALID_PREFIX
+					return 0
+				}
+				ip -6 route show exact "$configured_prefix" dev "$device" 2>/dev/null | grep -q . || {
+					write_state upstream-relay false '' '' "$configured_network" "$device" PREFIX_NOT_ONLINK
+					return 0
+				}
+				prefix="$configured_prefix"
+			fi
+			write_state upstream-relay true upstream-relay "$prefix" "$configured_network" "$device" READY
+			;;
+	esac
+}
+
+case "${1:-resolve}" in
+	resolve) resolve ;;
+	status) [ -s "$STATE_FILE" ] && cat "$STATE_FILE" || resolve ;;
+	validate-address) is_global_unicast "${2:-}" && printf 'valid\n' || exit 1 ;;
+	validate-prefix) valid_prefix_text "${2:-}" && printf 'valid\n' || exit 1 ;;
+	*) echo "usage: $0 {resolve|status|validate-address|validate-prefix}" >&2; exit 2 ;;
+esac

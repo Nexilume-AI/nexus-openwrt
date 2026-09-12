@@ -1,0 +1,34 @@
+Nexus OpenWrt
+Copyright Nexus contributors
+
+The Apache License, Version 2.0 in LICENSE applies to Nexus-authored code in
+this directory unless a file or component carries a different license notice.
+In particular, the Nexus-owned agent-adapter, agent-cardd, agent-gw, agent-netd,
+agentd, luci-app-agent-router, nexus-agent-profiles, nexus-agent-services,
+nexus-cloud-connector and nexus-luci-theme-profile packages declare Apache-2.0.
+Their direct packaging scripts use the same package license metadata.
+
+This notice does not relicense third-party code, dependencies or separately
+licensed components. Retain all applicable upstream notices when distributing
+source or binaries. In particular:
+
+- feed/nexus-node-runtime/Makefile retains its OpenWrt.org copyright and GNU GPL
+  v2 recipe notice. The complete recipe license is included in
+  feed/nexus-node-runtime/COPYING, copied verbatim from
+  https://github.com/openwrt/packages/blob/d50c9e2ac63808f8ea487ef8bc91632e7a483804/LICENSE
+  (SHA-256: 32b1062f7da84967e7019d01ab805935caa7ab7321a7ced0e30ebe75e5df1670).
+  The recipe's original /LICENSE reference refers to the upstream OpenWrt tree;
+  use this adjacent COPYING when reading the standalone Nexus source export.
+  Its Node.js runtime package remains MIT, with the upstream
+  LICENSE identified by PKG_LICENSE_FILES. The Node patch retains its existing
+  Joyent and other Node contributors' copyright notice.
+- The externally downloaded luci-theme-argon (Argon) theme retains its Apache
+  License 2.0 and Jerrykuku/contributors attribution. See the checksum-locked
+  dependency description in dependencies/luci-theme-argon.NOTICE.md.
+- OpenWrt, LuCI, OpenSSL, libubox, Node.js and other separately supplied
+  dependencies retain their own licenses. Package dependencies and linking do
+  not make this notice a replacement for their license terms.
+
+This standalone source snapshot excludes the Cloud Server, TokenBank, Python
+SDK and private parent repository history. Binary firmware distributions must
+retain the notices and corresponding sources of their actual components.

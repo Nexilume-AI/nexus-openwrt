@@ -1,0 +1,209 @@
+#!/bin/sh
+
+set -eu
+
+seed_ipv4="${1:-$(uci -q get network.lan.ipaddr || true)}"
+case "$seed_ipv4" in
+	''|*[!0-9.]*)
+		echo "nexus-open-mesh-seed: unable to determine the Router IPv4 address" >&2
+		exit 1
+		;;
+esac
+
+command -v node >/dev/null 2>&1 || {
+	echo "nexus-open-mesh-seed: Nexus Node runtime is not installed" >&2
+	exit 1
+}
+command -v openssl >/dev/null 2>&1 || {
+	echo "nexus-open-mesh-seed: openssl is not installed" >&2
+	exit 1
+}
+id nexus-relay >/dev/null 2>&1 || {
+	echo "nexus-open-mesh-seed: Relay service account is unavailable" >&2
+	exit 1
+}
+id nexus-directory >/dev/null 2>&1 || {
+	echo "nexus-open-mesh-seed: Directory service account is unavailable" >&2
+	exit 1
+}
+
+seed_dir=/etc/nexus-open-mesh-seed
+relay_config=/etc/nexus-relayd/relay.json
+directory_config=/etc/nexus-directoryd/directory.json
+ticket_key_id=open-mesh-seed-1
+realm_id=default-open-mesh
+relay_id=open-mesh-relay
+relay_port=17444
+directory_port=18443
+published_relay_port="${2:-$relay_port}"
+case "$published_relay_port" in
+	''|*[!0-9]*)
+		echo "nexus-open-mesh-seed: invalid published Relay port" >&2
+		exit 1 ;;
+esac
+[ "$published_relay_port" -ge 1 ] && [ "$published_relay_port" -le 65535 ] ||
+	{ echo "nexus-open-mesh-seed: invalid published Relay port" >&2; exit 1; }
+firewall_zone="$(uci show firewall 2>/dev/null | sed -n \
+	"s/^firewall\.[^.]*\.name='nexuswan'$/nexuswan/p" | head -n 1)"
+[ -n "$firewall_zone" ] || firewall_zone="$(uci show firewall 2>/dev/null | sed -n \
+	"s/^firewall\.[^.]*\.name='wan'$/wan/p" | head -n 1)"
+[ -n "$firewall_zone" ] || {
+	echo "nexus-open-mesh-seed: no WAN firewall zone is configured" >&2
+	exit 1
+}
+
+umask 077
+mkdir -p "$seed_dir" /etc/nexus-relayd /etc/nexus-directoryd \
+	/var/lib/nexus-relayd /var/lib/nexus-directoryd
+# The service keys remain group-readable only, but both dedicated service
+# users must be able to traverse the shared certificate directory.
+chmod 0755 "$seed_dir"
+
+if [ ! -s "$seed_dir/ca.key" ] || [ ! -s "$seed_dir/ca.pem" ]; then
+	openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 3650 \
+		-keyout "$seed_dir/ca.key" -out "$seed_dir/ca.pem" \
+		-subj '/CN=Nexus Open Mesh Seed CA' >/dev/null 2>&1
+fi
+
+issue_server_certificate() {
+	name="$1"
+	dns_name="$2"
+	key_file="$seed_dir/$name.key"
+	cert_file="$seed_dir/$name.pem"
+	csr_file="$seed_dir/$name.csr"
+	ext_file="$seed_dir/$name.ext"
+	if [ -s "$key_file" ] && [ -s "$cert_file" ]; then
+		return 0
+	fi
+	printf 'subjectAltName=DNS:%s\nextendedKeyUsage=serverAuth\n' "$dns_name" >"$ext_file"
+	openssl req -new -newkey rsa:2048 -sha256 -nodes \
+		-keyout "$key_file" -out "$csr_file" -subj "/CN=$dns_name" >/dev/null 2>&1
+	openssl x509 -req -sha256 -days 825 -in "$csr_file" \
+		-CA "$seed_dir/ca.pem" -CAkey "$seed_dir/ca.key" -CAcreateserial \
+		-extfile "$ext_file" -out "$cert_file" >/dev/null 2>&1
+	rm -f "$csr_file" "$ext_file"
+}
+
+issue_server_certificate relay relay-seed.mesh.local
+issue_server_certificate directory directory-seed.mesh.local
+
+ticket_secret="$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\r\n')"
+
+cat >"$relay_config" <<EOF
+{
+  "listen": "0.0.0.0",
+  "port": $relay_port,
+  "tls": {
+    "key": "$seed_dir/relay.key",
+    "cert": "$seed_dir/relay.pem",
+    "ca": "$seed_dir/ca.pem"
+  },
+  "relayId": "$relay_id",
+  "relayRouterId": "open-mesh-relay-router",
+  "relayDomainId": "mesh.local",
+  "heartbeatMs": 5000,
+  "maxNodes": 256,
+  "maxPairs": 1024,
+  "maxQueuedBytes": 262144,
+  "ticketMaxLifetimeSeconds": 300,
+  "ticketClockSkewSeconds": 5,
+  "maxUsedTickets": 4096,
+  "maxCapabilityRoutes": 4096,
+  "openMesh": {
+    "enabled": true,
+    "realmId": "$realm_id"
+  },
+  "ticketKeys": {
+    "$ticket_key_id": "$ticket_secret"
+  },
+  "cloudIngress": {"enabled": false},
+  "federation": {"enabled": false, "peers": {}},
+  "capture": "/var/lib/nexus-relayd/relay-events.jsonl"
+}
+EOF
+
+cat >"$directory_config" <<EOF
+{
+  "listen": "0.0.0.0",
+  "port": $directory_port,
+  "directoryId": "open-mesh-directory",
+  "tls": {
+    "key": "$seed_dir/directory.key",
+    "cert": "$seed_dir/directory.pem",
+    "ca": "$seed_dir/ca.pem"
+  },
+  "activeTicketKeyId": "$ticket_key_id",
+  "ticketKeys": {
+    "$ticket_key_id": "$ticket_secret"
+  },
+  "ticketTtlSeconds": 120,
+  "maxConnections": 256,
+  "openMesh": {
+    "enabled": true,
+    "realmId": "$realm_id",
+    "relayIds": ["$relay_id"],
+    "leaseSeconds": 300
+  },
+  "capture": "/var/lib/nexus-directoryd/directory-events.jsonl",
+  "relays": {
+    "$relay_id": {
+      "routerId": "open-mesh-relay-router",
+      "domainId": "mesh.local",
+      "endpoint": "https://relay-seed.mesh.local:$published_relay_port/arpx/v1",
+      "connectIpv4": "$seed_ipv4"
+    }
+  },
+  "identities": {}
+}
+EOF
+
+chown nexus-relay:nexus-relay "$seed_dir/relay.key" "$relay_config"
+chown nexus-directory:nexus-directory "$seed_dir/directory.key" "$directory_config"
+chown nexus-relay:nexus-relay /var/lib/nexus-relayd
+chown nexus-directory:nexus-directory /var/lib/nexus-directoryd
+chmod 0600 "$seed_dir/relay.key" "$seed_dir/directory.key" "$relay_config" "$directory_config"
+chmod 0644 "$seed_dir/ca.pem" "$seed_dir/relay.pem" "$seed_dir/directory.pem"
+
+uci -q batch <<EOF
+set nexus_roles.main.mode='all'
+set nexus_roles.relay.enabled='1'
+set nexus_roles.relay.config_file='$relay_config'
+set nexus_roles.directory.enabled='1'
+set nexus_roles.directory.config_file='$directory_config'
+set firewall.nexus_open_mesh_relay='rule'
+set firewall.nexus_open_mesh_relay.name='Allow-Nexus-Open-Mesh-Relay'
+set firewall.nexus_open_mesh_relay.src='$firewall_zone'
+set firewall.nexus_open_mesh_relay.proto='tcp'
+set firewall.nexus_open_mesh_relay.dest_port='$relay_port'
+set firewall.nexus_open_mesh_relay.target='ACCEPT'
+set firewall.nexus_open_mesh_directory='rule'
+set firewall.nexus_open_mesh_directory.name='Allow-Nexus-Open-Mesh-Directory'
+set firewall.nexus_open_mesh_directory.src='$firewall_zone'
+set firewall.nexus_open_mesh_directory.proto='tcp'
+set firewall.nexus_open_mesh_directory.dest_port='$directory_port'
+set firewall.nexus_open_mesh_directory.target='ACCEPT'
+EOF
+uci commit nexus_roles
+uci commit firewall
+
+/etc/init.d/firewall reload
+/etc/init.d/nexus-relayd enable
+/etc/init.d/nexus-directoryd enable
+/etc/init.d/nexus-relayd restart
+/etc/init.d/nexus-directoryd restart
+
+sleep 1
+ubus call service list '{"name":"nexus-relayd"}' | grep -q '"running": true' || {
+	echo "nexus-open-mesh-seed: Relay failed its service health check" >&2
+	exit 1
+}
+ubus call service list '{"name":"nexus-directoryd"}' | grep -q '"running": true' || {
+	echo "nexus-open-mesh-seed: Directory failed its service health check" >&2
+	exit 1
+}
+
+printf 'Open Mesh seed is ready.\n'
+printf 'Directory: https://directory-seed.mesh.local:%s/v1/open-mesh/assignment\n' "$directory_port"
+printf 'Relay: https://relay-seed.mesh.local:%s/arpx/v1\n' "$published_relay_port"
+printf 'Connect IPv4: %s\n' "$seed_ipv4"
+printf 'Realm: %s\n' "$realm_id"

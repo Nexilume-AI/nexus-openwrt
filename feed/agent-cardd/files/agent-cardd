@@ -1,0 +1,297 @@
+#!/bin/sh
+
+# jshn uses unset internal state variables as part of its API, so this service
+# cannot enable shell nounset around the library. Every daemon-owned input
+# still receives an explicit default below.
+. /usr/share/libubox/jshn.sh
+
+poll_seconds="${1:-30}"
+fetch_timeout="${2:-10}"
+trust_public_key="${3:-/etc/agentd/card-trust.pub}"
+expected_key_id="${4:-nexus-card-2026}"
+expected_issuer="${5:-nexus-local-trust}"
+directory_bundle_uri="${6:-}"
+directory_root_public_key="${7:-/etc/agentd/directory-root.pub}"
+max_card_bytes=65536
+max_signature_bytes=4096
+max_key_bytes=4096
+runtime_dir=/tmp/agent-cardd-trust
+
+log() {
+	logger -t agent-cardd -- "$*"
+}
+
+download_bounded() {
+	local uri="$1"
+	local output="$2"
+	local file_limit="$3"
+
+	(ulimit -f "$file_limit"; exec uclient-fetch -q \
+		-T "$fetch_timeout" -O "$output" "$uri")
+}
+
+refresh_directory_trust() {
+	local work_dir bundle_file signature_file bundle_bytes signature_bytes
+	local bundle_digest payload indexes index status key_uri key_sha key_file
+	local key_bytes actual_sha
+
+	[ -n "$directory_bundle_uri" ] || return 0
+	case "$directory_bundle_uri" in
+		https://*) ;;
+		*) log "rejecting non-HTTPS Directory trust URI"; return 1 ;;
+	esac
+	work_dir="$(mktemp -d /tmp/agent-cardd-directory.XXXXXX)" || return 1
+	bundle_file="$work_dir/bundle.json"
+	signature_file="$work_dir/bundle.json.sig"
+	mkdir "$work_dir/keys" || { rm -rf "$work_dir"; return 1; }
+	if ! download_bounded "$directory_bundle_uri" "$bundle_file" 128; then
+		log "Directory trust bundle download failed"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	if ! download_bounded "${directory_bundle_uri}.sig" \
+		"$signature_file" 8; then
+		log "Directory trust signature download failed"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	bundle_bytes="$(wc -c < "$bundle_file")"
+	signature_bytes="$(wc -c < "$signature_file")"
+	if [ "$bundle_bytes" -gt "$max_card_bytes" ] || \
+		[ "$signature_bytes" -gt "$max_signature_bytes" ]; then
+		log "Directory trust download size limit exceeded"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	if ! usign -V -p "$directory_root_public_key" -m "$bundle_file" \
+		-x "$signature_file" >/dev/null 2>&1; then
+		log "Directory trust signature verification failed"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	if ! json_load_file "$bundle_file" || ! json_select card_keys; then
+		log "verified Directory trust bundle is invalid"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	json_get_keys indexes
+	for index in $indexes; do
+		json_select "$index" || { rm -rf "$work_dir"; return 1; }
+		json_get_var status status
+		json_get_var key_uri public_key_uri
+		json_get_var key_sha public_key_sha256
+		json_select ..
+		[ "$status" = "revoked" ] && continue
+		if [ "$status" != "active" ] && [ "$status" != "retiring" ]; then
+			log "Directory trust bundle contains an invalid key status"
+			rm -rf "$work_dir"
+			return 1
+		fi
+		case "$key_uri" in
+			https://*) ;;
+			*) log "Directory trust bundle contains a non-HTTPS key URI";
+				rm -rf "$work_dir"; return 1 ;;
+		esac
+		case "$key_sha" in
+			*[!0-9a-f]*|'')
+				log "Directory trust bundle contains an invalid key digest"
+				rm -rf "$work_dir"
+				return 1
+				;;
+		esac
+		if [ "${#key_sha}" -ne 64 ]; then
+			log "Directory trust bundle contains an invalid key digest"
+			rm -rf "$work_dir"
+			return 1
+		fi
+		key_file="$work_dir/keys/$key_sha.pub"
+		if ! download_bounded "$key_uri" "$key_file" 8; then
+			log "Directory card key download failed"
+			rm -rf "$work_dir"
+			return 1
+		fi
+		key_bytes="$(wc -c < "$key_file")"
+		actual_sha="$(sha256sum "$key_file")"
+		actual_sha="${actual_sha%% *}"
+		if [ "$key_bytes" -gt "$max_key_bytes" ] || \
+			[ "$actual_sha" != "$key_sha" ]; then
+			log "Directory card key digest mismatch"
+			rm -rf "$work_dir"
+			return 1
+		fi
+	done
+	json_select ..
+	bundle_digest="$(sha256sum "$bundle_file")"
+	bundle_digest="${bundle_digest%% *}"
+	json_add_string digest_sha256 "$bundle_digest"
+	payload="$(json_dump)"
+	if ! ubus call agent card_trust_ingest_verified "$payload" >/dev/null; then
+		log "agentd rejected verified Directory trust bundle"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	mkdir -p "$runtime_dir"
+	rm -rf "$runtime_dir/keys.previous"
+	[ ! -d "$runtime_dir/keys" ] || \
+		mv "$runtime_dir/keys" "$runtime_dir/keys.previous"
+	mv "$work_dir/keys" "$runtime_dir/keys" || {
+		rm -rf "$work_dir"
+		return 1
+	}
+	mv "$bundle_file" "$runtime_dir/bundle.json" || {
+		rm -rf "$work_dir"
+		return 1
+	}
+	rm -rf "$runtime_dir/keys.previous" "$work_dir"
+	log "accepted signed Directory trust bundle"
+	return 0
+}
+
+select_directory_key() {
+	local router_id="$1"
+	local domain_id="$2"
+	local issuer="$3"
+	local key_id="$4"
+	local indexes index entry_router entry_domain entry_issuer entry_key_id
+	local entry_status entry_sha
+
+	selected_key=""
+	[ -s "$runtime_dir/bundle.json" ] || return 1
+	json_load_file "$runtime_dir/bundle.json" || return 1
+	json_select card_keys || return 1
+	json_get_keys indexes
+	for index in $indexes; do
+		json_select "$index" || continue
+		json_get_var entry_router router_id
+		json_get_var entry_domain domain_id
+		json_get_var entry_issuer issuer
+		json_get_var entry_key_id key_id
+		json_get_var entry_status status
+		json_get_var entry_sha public_key_sha256
+		json_select ..
+		[ "$entry_router" = "$router_id" ] || continue
+		[ "$entry_domain" = "$domain_id" ] || continue
+		[ "$entry_issuer" = "$issuer" ] || continue
+		[ "$entry_key_id" = "$key_id" ] || continue
+		if [ "$entry_status" != "active" ] && \
+			[ "$entry_status" != "retiring" ]; then
+			return 1
+		fi
+		selected_key="$runtime_dir/keys/$entry_sha.pub"
+		[ -s "$selected_key" ] || return 1
+		return 0
+	done
+	return 1
+}
+
+fetch_candidate() {
+	local router_id="$1"
+	local card_uri="$2"
+	local work_dir card_file signature_file digest payload card_bytes signature_bytes
+	local card_key_id card_issuer card_domain verify_key
+
+	case "$card_uri" in
+		https://*) ;;
+		*) log "rejecting non-HTTPS card URI for $router_id"; return 1 ;;
+	esac
+	work_dir="$(mktemp -d /tmp/agent-cardd.XXXXXX)" || return 1
+	card_file="$work_dir/card.json"
+	signature_file="$work_dir/card.json.sig"
+	if ! download_bounded "$card_uri" "$card_file" 128; then
+		log "card download failed for $router_id"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	if ! download_bounded "${card_uri}.sig" "$signature_file" 8; then
+		log "detached signature download failed for $router_id"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	card_bytes="$(wc -c < "$card_file")"
+	signature_bytes="$(wc -c < "$signature_file")"
+	if [ "$card_bytes" -gt "$max_card_bytes" ] || \
+		[ "$signature_bytes" -gt "$max_signature_bytes" ]; then
+		log "download size limit exceeded for $router_id"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	if ! json_load_file "$card_file"; then
+		log "card is not valid JSON for $router_id"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	json_get_var card_key_id key_id
+	json_get_var card_issuer issuer
+	json_get_var card_domain domain_id
+	if [ -n "$directory_bundle_uri" ]; then
+		if ! select_directory_key "$router_id" "$card_domain" \
+			"$card_issuer" "$card_key_id"; then
+			log "Directory trust does not authorize card key for $router_id"
+			rm -rf "$work_dir"
+			return 1
+		fi
+		verify_key="$selected_key"
+	else
+		if [ "$card_key_id" != "$expected_key_id" ] || \
+			[ "$card_issuer" != "$expected_issuer" ]; then
+			log "verified card trust identity mismatch for $router_id"
+			rm -rf "$work_dir"
+			return 1
+		fi
+		verify_key="$trust_public_key"
+	fi
+	if ! usign -V -p "$verify_key" -m "$card_file" \
+		-x "$signature_file" >/dev/null 2>&1; then
+		log "signature verification failed for $router_id"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	digest="$(sha256sum "$card_file")"
+	digest="${digest%% *}"
+	json_load_file "$card_file" || { rm -rf "$work_dir"; return 1; }
+	json_add_string digest_sha256 "$digest"
+	payload="$(json_dump)"
+	if ! ubus call agent card_ingest_verified "$payload" >/dev/null; then
+		log "agentd rejected verified card for $router_id"
+		rm -rf "$work_dir"
+		return 1
+	fi
+	log "authorized Agent Card revision for $router_id"
+	rm -rf "$work_dir"
+	return 0
+}
+
+poll_once() {
+	local reply indexes index router_id card_uri authorized dnssec_secure
+
+	if [ -n "$directory_bundle_uri" ]; then
+		refresh_directory_trust || true
+	fi
+	reply="$(ubus call agent cross_discoveries '{"limit":100}' 2>/dev/null)" || \
+		return 1
+	json_load "$reply" || return 1
+	json_select discoveries || return 1
+	json_get_keys indexes
+	for index in $indexes; do
+		json_select "$index" || continue
+		json_get_var router_id router_id
+		json_get_var card_uri agent_card_uri
+		json_get_var authorized card_authorized
+		json_get_var dnssec_secure dnssec_secure
+		json_select ..
+		[ "$dnssec_secure" = "1" ] || continue
+		# Directory bundle refresh may extend or shorten the key window. Re-ingest
+		# an unchanged Card in this mode so agentd recomputes the minimum lease.
+		if [ "$authorized" = "1" ] && [ -z "$directory_bundle_uri" ]; then
+			continue
+		fi
+		[ -n "$router_id" ] && [ -n "$card_uri" ] || continue
+		fetch_candidate "$router_id" "$card_uri" || true
+	done
+	json_select ..
+}
+
+while :; do
+	poll_once || true
+	sleep "$poll_seconds"
+done

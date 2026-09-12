@@ -1,0 +1,2264 @@
+#!/bin/sh
+
+IPKG_INSTROOT="${IPKG_INSTROOT:-}"
+
+. /lib/functions.sh
+. /usr/share/libubox/jshn.sh
+
+RUNTIME_DIR=/var/run/nexus-cloud
+STATUS_FILE=$RUNTIME_DIR/status.json
+REGISTRATION_STATE=$RUNTIME_DIR/registrations.tsv
+AGENT_CLOUD_STATUS_DIR=/var/run/nexus-agent-cloud
+AGENT_REGISTRATION_STATUS=$AGENT_CLOUD_STATUS_DIR/registrations.json
+AGENT_CLOUD_ENABLED=$AGENT_CLOUD_STATUS_DIR/enabled
+AGENT_CLOUD_ENROLLED=$AGENT_CLOUD_STATUS_DIR/enrolled
+AGENT_CLOUD_TENANT_ID=$AGENT_CLOUD_STATUS_DIR/tenant-id
+MANIFEST_SNAPSHOT=/var/run/agent-manifests/manifests.json
+GENERATION_FILE=/etc/nexus-cloud/generation
+CLOUD_TENANT_ID_FILE=/etc/nexus-cloud/tenant.id
+GATEWAY_TOKEN_FILE=/etc/agentd/nexus-cloud-gateway.token
+GATEWAY_TOKEN_DIGEST_FILE=/etc/agent-gw/nexus-cloud-gateway-token.sha256
+MANAGED_INGRESS_DIR=/etc/agent-gw/tls
+MANAGED_INGRESS_KEY=$MANAGED_INGRESS_DIR/cloud-server.key
+MANAGED_INGRESS_CERT=$MANAGED_INGRESS_DIR/cloud-server.crt
+MANAGED_INGRESS_CLIENT_CA=$MANAGED_INGRESS_DIR/cloud-client-ca.crt
+TAB="$(printf '\t')"
+CLOUD_STATUS_SEPARATOR='|'
+STOPPING=0
+LAST_HTTP_CODE=0
+LAST_ERROR_CODE=''
+REENROLLING=0
+STATUS_RECOVERY_ACTION=''
+STATUS_NEXT_RETRY_SECONDS=0
+STATUS_REGISTRATION_HTTP_CODE=0
+STATUS_REGISTRATION_ERROR_CODE=''
+STATUS_CLOUD_RELAY_AVAILABLE=''
+STATUS_LOCAL_RELAY_ENABLED=0
+STATUS_RELAY_READY=0
+SNAPSHOT_ERROR_STAGE=''
+# A managed ingress certificate is scoped to the Cloud identity that issued it.
+# Local certificate validity alone cannot prove that a certificate left behind
+# by another Cloud registration is trusted by the current Nexus Cloud.
+FORCE_MANAGED_INGRESS_RENEWAL=1
+
+log() {
+	logger -t nexus-cloud -- "$*"
+}
+
+safe_line() {
+	case "$1" in
+		*"$TAB"*|*"$CLOUD_STATUS_SEPARATOR"*|*"
+"*|*""*) return 1 ;;
+	esac
+	return 0
+}
+
+valid_cloud_tenant_id() {
+	[ "${#1}" -eq 36 ] || return 1
+	case "$1" in
+		????????-????-????-????-????????????) ;;
+		*) return 1 ;;
+	esac
+	case "$1" in *[!0-9a-f-]*) return 1 ;; esac
+	return 0
+}
+
+project_cloud_tenant_id() {
+	local value="$1" temporary=$AGENT_CLOUD_TENANT_ID.tmp.$$ current
+	valid_cloud_tenant_id "$value" || return 1
+	printf '%s\n' "$value" >"$temporary" && chmod 0644 "$temporary" &&
+		mv -f "$temporary" "$AGENT_CLOUD_TENANT_ID" || return 1
+	# Dynamic SDK tools are invoked through agent-adapterd using the enrolled
+	# Cloud tenant. Keep that identity projection router-managed; applications
+	# must never be asked to copy a Cloud tenant ID into UCI.
+	uci -q get agent_adapter.main >/dev/null 2>&1 || return 0
+	current="$(uci -q get agent_adapter.main.default_tenant || true)"
+	[ "$current" = "$value" ] && return 0
+	uci set agent_adapter.main.default_tenant="$value" || return 1
+	uci commit agent_adapter || return 1
+	ubus call service event \
+		'{"type":"config.change","data":{"package":"agent_adapter"}}' \
+		>/dev/null 2>&1
+}
+
+install_cloud_tenant_id() {
+	local value="$1" temporary=$CLOUD_TENANT_ID_FILE.tmp.$$
+	valid_cloud_tenant_id "$value" || return 1
+	mkdir -p /etc/nexus-cloud && chmod 0700 /etc/nexus-cloud || return 1
+	printf '%s\n' "$value" >"$temporary" && chmod 0600 "$temporary" &&
+		mv -f "$temporary" "$CLOUD_TENANT_ID_FILE" || return 1
+	project_cloud_tenant_id "$value"
+}
+
+safe_path() {
+	case "$1" in
+		/*) ;;
+		*) return 1 ;;
+	esac
+	case "$1" in *'\'*) return 1 ;; esac
+	case "$1" in
+		*..*|*'"'*|*"
+"*|*""*) return 1 ;;
+	esac
+	return 0
+}
+
+b64_encode() {
+	printf '%s' "$1" | openssl base64 -A
+}
+
+b64_decode() {
+	printf '%s' "$1" | openssl base64 -A -d 2>/dev/null
+}
+
+route_belongs_to_agent() {
+	local capability_file="$1" wanted="$2" intent route_id
+	while IFS="$TAB" read -r intent route_id; do
+		[ "$route_id" = "$wanted" ] && return 0
+	done <"$capability_file"
+	return 1
+}
+
+extract_cloud_manifests() {
+	local snapshot_dir="$1" content keys key origin publish agent_name digest route_id
+	local candidate agent_dir='' selector title description input_schema intent version
+	local task continuable recovery_protocol demo chat interactive existing_name encoded
+	local input_modalities modality_keys modality_key modality
+	local computer_requirement computer_scope computer_keys computer_key computer_tmp
+	local mobile_requirement mobile_scope mobile_keys mobile_key mobile_tmp mobile_tool_scopes
+	[ -e "$MANIFEST_SNAPSHOT" ] || return 0
+	[ -f "$MANIFEST_SNAPSHOT" ] && [ ! -L "$MANIFEST_SNAPSHOT" ] || return 1
+	[ "$(wc -c <"$MANIFEST_SNAPSHOT" 2>/dev/null)" -le 1048576 ] || return 1
+	content="$(cat "$MANIFEST_SNAPSHOT")"
+	json_load "$content" || return 1
+	json_select manifests || return 1
+	json_get_keys keys
+	for key in $keys; do
+		json_select "$key"
+		json_get_var origin origin
+		json_get_var publish publish
+		json_get_var agent_name agent_name
+		json_get_var digest manifest_digest
+		json_get_var route_id route_id
+		case "$publish" in 1|true) ;; *) json_select ..; continue ;; esac
+		if ! safe_line "$origin" || ! safe_line "$agent_name" ||
+			! safe_line "$digest" || ! safe_line "$route_id"; then
+			json_select ..
+			continue
+		fi
+		case "$digest" in
+			????????????????????????????????????????????????????????????????) ;;
+			*) json_select ..; continue ;;
+		esac
+		case "$digest" in *[!0-9a-f]*) json_select ..; continue ;; esac
+		agent_dir=''
+		for candidate in "$snapshot_dir"/agent-*; do
+			[ -d "$candidate" ] || continue
+			[ "$(cat "$candidate/origin")" = "$origin" ] || continue
+			agent_dir="$candidate"
+			break
+		done
+		if [ -z "$agent_dir" ] ||
+			! route_belongs_to_agent "$agent_dir/capabilities" "$route_id"; then
+			json_select ..
+			continue
+		fi
+		if json_select computer >/dev/null 2>&1; then
+			json_get_var computer_requirement requirement
+			case "$computer_requirement" in disabled|optional|required) ;; *) return 1 ;; esac
+			computer_tmp="$agent_dir/computer-scopes.candidate.$$"
+			: >"$computer_tmp"
+			if json_select workspace_capabilities; then
+				json_get_keys computer_keys
+				for computer_key in $computer_keys; do
+					json_get_var computer_scope "$computer_key"
+					case "$computer_scope" in
+						connection.list|connection.create|connection.update|connection.delete|connection.test|connection.bind|files.list|files.read|files.write|command.execute|browser.control) ;;
+						*) rm -f "$computer_tmp"; return 1 ;;
+					esac
+					printf '%s\n' "$computer_scope" >>"$computer_tmp"
+				done
+				json_select ..
+			fi
+			json_select ..
+			if [ -e "$agent_dir/computer-present" ]; then
+				[ "$(cat "$agent_dir/computer-requirement")" = "$computer_requirement" ] &&
+					cmp -s "$agent_dir/computer-scopes" "$computer_tmp" || {
+					rm -f "$computer_tmp"
+					return 1
+				}
+				rm -f "$computer_tmp"
+			else
+				printf '%s\n' "$computer_requirement" >"$agent_dir/computer-requirement"
+				mv -f "$computer_tmp" "$agent_dir/computer-scopes"
+				: >"$agent_dir/computer-present"
+			fi
+		fi
+		if json_select mobile >/dev/null 2>&1; then
+			json_get_var mobile_requirement requirement
+			case "$mobile_requirement" in disabled|optional|required) ;; *) return 1 ;; esac
+			mobile_tmp="$agent_dir/mobile-scopes.candidate.$$"
+			: >"$mobile_tmp"
+			if json_select mobile_capabilities; then
+				json_get_keys mobile_keys
+				for mobile_key in $mobile_keys; do
+					json_get_var mobile_scope "$mobile_key"
+					case "$mobile_scope" in
+						mobile.observe|mobile.screen.capture|mobile.tap|mobile.type_text|mobile.swipe|mobile.press_back|mobile.open_app|mobile.wait_for_state) ;;
+						*) rm -f "$mobile_tmp"; return 1 ;;
+					esac
+					printf '%s\n' "$mobile_scope" >>"$mobile_tmp"
+				done
+				json_select ..
+			fi
+			json_select ..
+			[ "$mobile_requirement" != required ] || [ -s "$mobile_tmp" ] || {
+				rm -f "$mobile_tmp"
+				return 1
+			}
+			if [ -e "$agent_dir/mobile-present" ]; then
+				[ "$(cat "$agent_dir/mobile-requirement")" = "$mobile_requirement" ] &&
+					cmp -s "$agent_dir/mobile-scopes" "$mobile_tmp" || {
+					rm -f "$mobile_tmp"
+					return 1
+				}
+				rm -f "$mobile_tmp"
+			else
+				printf '%s\n' "$mobile_requirement" >"$agent_dir/mobile-requirement"
+				mv -f "$mobile_tmp" "$agent_dir/mobile-scopes"
+				: >"$agent_dir/mobile-present"
+			fi
+		fi
+		if ! json_select tool; then
+			json_select ..
+			continue
+		fi
+		json_get_var selector selector
+		json_get_var title title
+		json_get_var description description
+		json_get_var input_schema input_schema_json
+		json_get_var intent intent
+		json_get_var version intent_version
+		json_get_var task task
+		json_get_var continuable continuable
+		if [ -z "$continuable" ]; then
+			# Older agent-gw/agentd builds normalize the SDK's continuable
+			# field to the historical resumable name. Keep those Agents
+			# publishable, but never promote them to managed recovery.
+			json_get_var continuable resumable
+		fi
+		json_get_var recovery_protocol recovery_protocol
+		[ -n "$recovery_protocol" ] || recovery_protocol=0
+		json_get_var demo demo
+		json_get_var chat chat
+		json_get_var interactive interactive
+		input_modalities='text'
+		if json_select input_modalities >/dev/null 2>&1; then
+			input_modalities=''
+			json_get_keys modality_keys
+			for modality_key in $modality_keys; do
+				json_get_var modality "$modality_key"
+				case "$modality" in text|image|audio) ;; *) return 1 ;; esac
+				case ",$input_modalities," in *",$modality,"*) ;; *)
+					input_modalities="${input_modalities}${input_modalities:+,}${modality}"
+				;; esac
+			done
+			json_select ..
+			[ -n "$input_modalities" ] || return 1
+		fi
+		mobile_tool_scopes=''
+		if json_select mobile_scopes >/dev/null 2>&1; then
+			json_get_keys mobile_keys
+			for mobile_key in $mobile_keys; do
+				json_get_var mobile_scope "$mobile_key"
+				grep -Fxq "$mobile_scope" "$agent_dir/mobile-scopes" 2>/dev/null || return 1
+				mobile_tool_scopes="${mobile_tool_scopes}${mobile_tool_scopes:+,}${mobile_scope}"
+			done
+			json_select ..
+		fi
+		json_select ..
+		if ! safe_line "$selector" || ! safe_line "$intent" ||
+			[ -z "$selector" ] || [ -z "$intent" ]; then
+			json_select ..
+			continue
+		fi
+		case "$version:$task:$continuable:$recovery_protocol:$demo:$chat:$interactive" in
+			*[!0-9:false]*) json_select ..; continue ;;
+		esac
+		case "$recovery_protocol" in 0|1) ;; *) json_select ..; continue ;; esac
+		existing_name="$(cat "$agent_dir/cloud-name" 2>/dev/null || true)"
+		if [ -n "$existing_name" ] && [ "$existing_name" != "$agent_name" ]; then
+			return 1
+		fi
+		printf '%s\n' "$agent_name" >"$agent_dir/cloud-name"
+		# Keep the always-present modalities field before the optional final
+		# mobile scopes field. POSIX shells collapse adjacent IFS whitespace,
+		# so an empty field must not appear in the middle of this TSV record.
+		encoded="$(b64_encode "$selector")$TAB$(b64_encode "$title")$TAB$(b64_encode "$description")$TAB$(b64_encode "$input_schema")$TAB$(b64_encode "$intent")$TAB$version$TAB$task$TAB$continuable$TAB$recovery_protocol$TAB$demo$TAB$chat$TAB$interactive$TAB$(b64_encode "$input_modalities")$TAB$(b64_encode "$mobile_tool_scopes")"
+		printf '%s\n' "$encoded" >>"$agent_dir/dynamic-tools.tsv"
+		json_select ..
+	done
+	json_select ..
+	for agent_dir in "$snapshot_dir"/agent-*; do
+		[ -s "$agent_dir/dynamic-tools.tsv" ] || continue
+		if [ -e "$agent_dir/computer-present" ] || [ -e "$agent_dir/mobile-present" ]; then
+			( cat "$agent_dir/dynamic-tools.tsv";
+				[ ! -e "$agent_dir/computer-present" ] || { cat "$agent_dir/computer-requirement"; cat "$agent_dir/computer-scopes"; }
+				[ ! -e "$agent_dir/mobile-present" ] || { cat "$agent_dir/mobile-requirement"; cat "$agent_dir/mobile-scopes"; }
+			) |
+				sha256sum | awk '{print $1}' >"$agent_dir/manifest-digest"
+		else
+			sha256sum "$agent_dir/dynamic-tools.tsv" | awk '{print $1}' >"$agent_dir/manifest-digest"
+		fi
+	done
+	return 0
+}
+
+ensure_gateway_token() {
+	local temporary="$GATEWAY_TOKEN_FILE.tmp.$$" digest_temporary
+	local valid=0 current_digest=''
+	digest_temporary="$GATEWAY_TOKEN_DIGEST_FILE.tmp.$$"
+
+	mkdir -p /etc/agentd /etc/agent-gw || return 1
+	if [ -f "$GATEWAY_TOKEN_FILE" ] &&
+		[ ! -L "$GATEWAY_TOKEN_FILE" ] &&
+		[ "$(wc -c <"$GATEWAY_TOKEN_FILE" 2>/dev/null)" -eq 64 ] &&
+		grep -Eq '^[0-9a-f]{64}$' "$GATEWAY_TOKEN_FILE"; then
+		valid=1
+	fi
+	GATEWAY_TOKEN_CHANGED=0
+	if [ "$valid" -ne 1 ]; then
+		umask 077
+		openssl rand -hex 32 2>/dev/null | tr -d '\r\n' >"$temporary" || {
+			rm -f "$temporary"
+			return 1
+		}
+		[ "$(wc -c <"$temporary" 2>/dev/null)" -eq 64 ] &&
+			grep -Eq '^[0-9a-f]{64}$' "$temporary" || {
+			rm -f "$temporary"
+			return 1
+		}
+		chown root:root "$temporary" && chmod 0600 "$temporary" &&
+			mv -f "$temporary" "$GATEWAY_TOKEN_FILE" || {
+			rm -f "$temporary"
+			return 1
+		}
+		GATEWAY_TOKEN_CHANGED=1
+	else
+		chown root:root "$GATEWAY_TOKEN_FILE" &&
+			chmod 0600 "$GATEWAY_TOKEN_FILE" || return 1
+	fi
+	GATEWAY_TOKEN_FINGERPRINT="$(
+		openssl dgst -sha256 "$GATEWAY_TOKEN_FILE" 2>/dev/null |
+			awk '{print $NF}' | tr 'A-F' 'a-f'
+	)"
+	case "$GATEWAY_TOKEN_FINGERPRINT" in
+		????????????????????????????????????????????????????????????????) ;;
+		*) return 1 ;;
+	esac
+	case "$GATEWAY_TOKEN_FINGERPRINT" in *[!0-9a-f]*) return 1 ;; esac
+	[ -f "$GATEWAY_TOKEN_DIGEST_FILE" ] &&
+		[ ! -L "$GATEWAY_TOKEN_DIGEST_FILE" ] &&
+		current_digest="$(cat "$GATEWAY_TOKEN_DIGEST_FILE" 2>/dev/null || true)"
+	if [ "$current_digest" != "$GATEWAY_TOKEN_FINGERPRINT" ]; then
+		umask 077
+		printf '%s' "$GATEWAY_TOKEN_FINGERPRINT" >"$digest_temporary" &&
+			chown root:agentd "$digest_temporary" &&
+			chmod 0640 "$digest_temporary" &&
+			mv -f "$digest_temporary" "$GATEWAY_TOKEN_DIGEST_FILE" || {
+			rm -f "$digest_temporary"
+			return 1
+		}
+		GATEWAY_TOKEN_CHANGED=1
+	else
+		chown root:agentd "$GATEWAY_TOKEN_DIGEST_FILE" &&
+			chmod 0640 "$GATEWAY_TOKEN_DIGEST_FILE" || return 1
+	fi
+	return 0
+}
+
+write_status() {
+	local state="$1" message="$2" registered="${3:-0}" eligible="${4:-0}" skipped="${5:-0}"
+	local skip_reason="${6:-}"
+	local temporary=$STATUS_FILE.tmp.$$
+	json_init
+	json_add_string state "$state"
+	json_add_string message "$message"
+	json_add_int registered "$registered"
+	json_add_int eligible "$eligible"
+	json_add_int skipped "$skipped"
+	json_add_string configured_transport "${cloud_transport:-auto}"
+	[ -z "${STATUS_ACTIVE_TRANSPORT:-}" ] || json_add_string active_transport "$STATUS_ACTIVE_TRANSPORT"
+	[ -z "${STATUS_RELAY_ID:-}" ] || json_add_string relay_id "$STATUS_RELAY_ID"
+	[ -z "${STATUS_RELAY_ASSIGNMENT_ID:-}" ] || json_add_string relay_assignment_id "$STATUS_RELAY_ASSIGNMENT_ID"
+	[ -z "${STATUS_RELAY_CONFIG_GENERATION:-}" ] || json_add_string relay_config_generation "$STATUS_RELAY_CONFIG_GENERATION"
+	json_add_int relay_tunnels_up "${STATUS_RELAY_TUNNELS_UP:-0}"
+	# relay_available remains as a compatibility alias, but both fields now
+	# describe Cloud service availability only. Local mode and live tunnel
+	# readiness are separate so Direct IPv6 cannot masquerade as a Cloud outage.
+	if [ -n "${STATUS_CLOUD_RELAY_AVAILABLE:-}" ]; then
+		json_add_boolean cloud_relay_available "$STATUS_CLOUD_RELAY_AVAILABLE"
+		json_add_boolean relay_available "$STATUS_CLOUD_RELAY_AVAILABLE"
+	fi
+	json_add_boolean relay_enabled "${STATUS_LOCAL_RELAY_ENABLED:-0}"
+	json_add_boolean relay_ready "${STATUS_RELAY_READY:-0}"
+	[ -z "${SNAPSHOT_ERROR_STAGE:-}" ] || json_add_string snapshot_error_stage "$SNAPSHOT_ERROR_STAGE"
+	[ -z "${STATUS_RECOVERY_ACTION:-}" ] || json_add_string recovery_action "$STATUS_RECOVERY_ACTION"
+	json_add_int next_retry_seconds "${STATUS_NEXT_RETRY_SECONDS:-0}"
+	[ -z "$skip_reason" ] || json_add_string skip_reason "$skip_reason"
+	json_add_int last_http_code "$LAST_HTTP_CODE"
+	json_add_int registration_http_code "${STATUS_REGISTRATION_HTTP_CODE:-0}"
+	[ -z "${STATUS_REGISTRATION_ERROR_CODE:-}" ] || \
+		json_add_string registration_error_code "$STATUS_REGISTRATION_ERROR_CODE"
+	json_add_string updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	json_dump >"$temporary" && chmod 0644 "$temporary" && mv -f "$temporary" "$STATUS_FILE"
+}
+
+mcp_path_for_origin() {
+	local origin="$1" remaining="$1" character byte encoded='/mcp/'
+	# Preserve RFC 3986 unreserved characters directly and percent-encode all
+	# other ASCII bytes. Agent origins are URI identifiers; rejecting a
+	# non-ASCII byte is safer than emitting a non-canonical path. POSIX printf
+	# accepts a quoted character as a numeric argument, so this does not depend
+	# on optional BusyBox od/hexdump applets or printf %b reconstruction.
+	while [ -n "$remaining" ]; do
+		character="${remaining%"${remaining#?}"}"
+		remaining="${remaining#?}"
+		case "$character" in
+			[A-Za-z0-9._~-]) encoded="${encoded}${character}" ;;
+			*)
+				byte="$(printf '%02X' "'$character" 2>/dev/null)" || return 1
+				[ "${#byte}" -eq 2 ] || return 1
+				encoded="${encoded}%${byte}"
+				;;
+		esac
+	done
+	[ "$encoded" != '/mcp/' ] || return 1
+	[ "${#encoded}" -le 255 ] || return 2
+	printf '%s' "$encoded"
+}
+
+load_configuration() {
+	config_load nexus_cloud
+	config_get_bool enabled main enabled 0
+	config_get base_url main base_url ''
+	config_get enrollment_url main enrollment_url ''
+	config_get pairing_code main pairing_code ''
+	config_get display_name main display_name ''
+	config_get cloud_transport main connectivity_mode auto
+	config_get sync_interval main sync_interval_seconds 120
+	config_get recovery_interval main recovery_interval_seconds 30
+	config_get lease_seconds main lease_seconds 300
+	config_get connect_timeout main connect_timeout_seconds 10
+	config_get request_timeout main request_timeout_seconds 30
+	config_get token_file main token_file /etc/nexus-cloud/device.token
+	config_get node_id_file main node_id_file /etc/nexus-cloud/node.id
+	config_get client_cert main client_cert /etc/nexus-cloud/device.crt
+	config_get client_key main client_key /etc/nexus-cloud/device.key
+	config_get identity_mode main identity_mode managed
+	config_get ca_file main ca_file /etc/ssl/certs/ca-certificates.crt
+	config_get device_cert_sha256 main device_cert_sha256 ''
+	config_get mcp_path main mcp_path /mcp/
+
+	config_load agent
+	config_get router_id main router_id ''
+	config_get domain_id main domain_id ''
+	config_get public_ipv6_mode main public_ipv6_mode routed-prefix
+	config_load agent_gateway
+	config_get public_transport main public_transport auto
+	config_get_bool mtls_enabled main mtls_enabled 0
+	config_get mtls_server_cert main mtls_server_cert "$MANAGED_INGRESS_CERT"
+	config_get mtls_server_key main mtls_server_key "$MANAGED_INGRESS_KEY"
+	config_get mtls_client_ca main mtls_client_ca "$MANAGED_INGRESS_CLIENT_CA"
+	config_get_bool public_descriptor_enabled main public_descriptor_enabled 0
+	config_get public_tls_server_name main public_tls_server_name ''
+	config_get public_ca_bundle_id main public_ca_bundle_id ''
+	config_get public_ingress_port main public_ingress_port 7443
+
+	base_url="${base_url%/}"
+	enrollment_url="${enrollment_url%/}"
+	[ -n "$enrollment_url" ] || enrollment_url="$base_url"
+	for cloud_url in "$base_url" "$enrollment_url"; do
+		case "$cloud_url" in https://*) ;; *) return 1 ;; esac
+		case "$cloud_url" in https://*/*) return 1 ;; esac
+		case "$cloud_url" in *'"'*|*'\'*) return 1 ;; esac
+		case "$cloud_url" in *" "*|*"	"*|*"
+"*|*""*) return 1 ;; esac
+	done
+	case "$sync_interval:$recovery_interval:$lease_seconds:$connect_timeout:$request_timeout:$public_ingress_port" in
+		*[!0-9:]*) return 1 ;;
+	esac
+	[ "$sync_interval" -ge 30 ] && [ "$sync_interval" -le 1800 ] || return 1
+	[ "$recovery_interval" -ge 10 ] && [ "$recovery_interval" -le 300 ] || return 1
+	[ "$recovery_interval" -le "$sync_interval" ] || return 1
+	[ "$lease_seconds" -ge 60 ] && [ "$lease_seconds" -le 3600 ] || return 1
+	[ "$sync_interval" -lt "$lease_seconds" ] || return 1
+	[ "$public_ingress_port" -ge 1 ] && [ "$public_ingress_port" -le 65535 ] || return 1
+	[ -n "$router_id" ] && [ -n "$domain_id" ] || return 1
+	safe_line "$router_id" && safe_line "$domain_id" || return 1
+	safe_path "$token_file" && safe_path "$node_id_file" && safe_path "$client_cert" &&
+		safe_path "$client_key" && safe_path "$ca_file" && safe_path "$mtls_server_cert" &&
+		safe_path "$mtls_server_key" && safe_path "$mtls_client_ca" || return 1
+	case "$token_file:$node_id_file" in /etc/nexus-cloud/*:/etc/nexus-cloud/*) ;; *) return 1 ;; esac
+	case "$identity_mode" in managed|manual) ;; *) return 1 ;; esac
+	case "$cloud_transport" in auto|direct_ipv6|relay) ;; *) return 1 ;; esac
+	# This is a prefix, not a complete endpoint. Each registration appends an
+	# encoded origin; accepting another prefix would create an adapter route
+	# that cannot be parsed.
+	[ "$mcp_path" = '/mcp/' ] || return 1
+	return 0
+}
+
+curl_request() {
+	local method="$1" url="$2" payload="$3" response="$4" authenticated="$5"
+	local curl_config=$RUNTIME_DIR/curl.$$.conf token=''
+	LAST_HTTP_CODE=0
+	LAST_ERROR_CODE=''
+	umask 077
+	{
+		printf 'silent\nshow-error\n'
+		printf 'connect-timeout = "%s"\n' "$connect_timeout"
+		printf 'max-time = "%s"\n' "$request_timeout"
+		printf 'request = "%s"\n' "$method"
+		printf 'url = "%s"\n' "$url"
+		printf 'output = "%s"\n' "$response"
+		printf 'write-out = "%%{http_code}"\n'
+		printf 'header = "Content-Type: application/json"\n'
+		[ -r "$ca_file" ] && printf 'cacert = "%s"\n' "$ca_file"
+		if [ -r "$client_cert" ] && [ -r "$client_key" ]; then
+			printf 'cert = "%s"\n' "$client_cert"
+			printf 'key = "%s"\n' "$client_key"
+		fi
+		if [ "$authenticated" -eq 1 ]; then
+			token="$(cat "$token_file" 2>/dev/null || true)"
+			case "$token" in edge_[A-Za-z0-9_-]*) ;; *) return 1 ;; esac
+			printf 'header = "Authorization: Edge %s"\n' "$token"
+		fi
+		[ -n "$payload" ] && printf 'data-binary = "@%s"\n' "$payload"
+		# Keep the config-generation block successful for bodyless GET,
+		# DELETE and confirmation requests. Without this no-op, the false
+		# payload test becomes the block's exit status and curl never runs.
+		:
+	} >"$curl_config" || return 1
+	LAST_HTTP_CODE="$(curl --config "$curl_config")"
+	rm -f "$curl_config"
+	case "$LAST_HTTP_CODE" in
+		2??) return 0 ;;
+		*) LAST_ERROR_CODE="$(json_error_code "$response" 2>/dev/null || true)"; return 1 ;;
+	esac
+}
+
+clear_recovery_status() {
+	STATUS_RECOVERY_ACTION=''
+	STATUS_NEXT_RETRY_SECONDS=0
+}
+
+set_recovery_status() {
+	STATUS_RECOVERY_ACTION="$1"
+	STATUS_NEXT_RETRY_SECONDS="$2"
+}
+
+cloud_authorization_required() {
+	case "$LAST_HTTP_CODE" in
+		401|403) return 0 ;;
+	esac
+	case "$LAST_ERROR_CODE" in
+		NOT_AUTHENTICATED|EDGE_DEVICE_REVOKED|EDGE_NODE_REVOKED|DEVICE_REVOKED) return 0 ;;
+	esac
+	return 1
+}
+
+classify_cloud_recovery() {
+	if cloud_authorization_required; then
+		set_recovery_status reauthorize "$sync_interval"
+		return 0
+	fi
+	[ "$STATUS_RECOVERY_ACTION" != reauthorize ] || return 0
+	if [ "$LAST_ERROR_CODE" = AGENT_CLOUD_MANIFEST_MISSING ]; then
+		set_recovery_status awaiting_agent_republish "$recovery_interval"
+		return 0
+	fi
+	case "$LAST_HTTP_CODE" in
+		4??) set_recovery_status fix_configuration "$sync_interval" ;;
+		*) [ -n "$STATUS_RECOVERY_ACTION" ] || set_recovery_status automatic_retry "$recovery_interval" ;;
+	esac
+}
+
+current_retry_delay() {
+	case "$STATUS_RECOVERY_ACTION" in
+		automatic_retry) printf '%s' "$recovery_interval" ;;
+		*) printf '%s' "$sync_interval" ;;
+	esac
+}
+
+json_error_code() {
+	local filename="$1" content code
+	content="$(cat "$filename" 2>/dev/null || true)"
+	json_load "$content" >/dev/null 2>&1 || return 1
+	json_select error >/dev/null 2>&1 || return 1
+	json_get_var code code
+	[ -n "$code" ] || return 1
+	printf '%s' "$code"
+}
+
+json_data_value() {
+	local filename="$1" name="$2" content value
+	content="$(cat "$filename" 2>/dev/null || true)"
+	json_load "$content" >/dev/null 2>&1 || return 1
+	json_select data >/dev/null 2>&1 || return 1
+	json_get_var value "$name"
+	[ -n "$value" ] || return 1
+	printf '%s' "$value"
+}
+
+write_agent_registration_status() {
+	local filename="$1" generation="$2" temporary=$AGENT_REGISTRATION_STATUS.tmp.$$
+	local origin state registration_id agent_id runtime_id transport mcp_url digest message64 message
+	json_init
+	json_add_int generation "$generation"
+	json_add_array registrations
+	while IFS="$CLOUD_STATUS_SEPARATOR" read -r origin state registration_id agent_id runtime_id transport mcp_url digest message64; do
+		[ -n "$origin" ] && [ -n "$state" ] || continue
+		message="$(b64_decode "$message64")" || message=''
+		json_add_object ''
+		json_add_string origin "$origin"
+		json_add_string state "$state"
+		[ -z "$registration_id" ] || json_add_string registration_id "$registration_id"
+		[ -z "$agent_id" ] || json_add_string agent_id "$agent_id"
+		[ -z "$runtime_id" ] || json_add_string runtime_id "$runtime_id"
+		[ -z "$transport" ] || json_add_string transport "$transport"
+		[ -z "$mcp_url" ] || json_add_string mcp_url "$mcp_url"
+		[ -z "$digest" ] || json_add_string manifest_digest "$digest"
+		[ -z "$message" ] || json_add_string message "$message"
+		json_close_object
+	done <"$filename"
+	json_close_array
+	json_dump >"$temporary" && chmod 0644 "$temporary" &&
+		mv -f "$temporary" "$AGENT_REGISTRATION_STATUS"
+}
+
+configure_edge_auth() {
+	local filename="$1" content issuer audience jwks_path
+	content="$(cat "$filename" 2>/dev/null || true)"
+	json_load "$content" >/dev/null 2>&1 || return 1
+	json_select data >/dev/null 2>&1 || return 1
+	json_select edge_auth >/dev/null 2>&1 || return 1
+	json_get_var issuer issuer
+	json_get_var audience audience
+	json_get_var jwks_path jwks_path
+	[ -n "$issuer" ] && [ -n "$audience" ] || return 1
+	[ "$jwks_path" = /api/v1/edge/.well-known/jwks.json ] || return 1
+	safe_line "$issuer" && safe_line "$audience" || return 1
+	case "$issuer" in https://*) ;; *) return 1 ;; esac
+	case "$issuer:$audience" in *'"'*|*'\'*|*" "*) return 1 ;; esac
+	case "$ca_file" in /etc/ssl/certs/*|/etc/agent-gw/*) ;; *) return 1 ;; esac
+	case "$enrollment_url" in https://*/*) return 1 ;; https://*) ;; *) return 1 ;; esac
+	uci set agent_gateway.main.auth_mode=jwt
+	uci set agent_gateway.main.jwt_required=1
+	uci set agent_gateway.main.jwt_jwks_url="$enrollment_url$jwks_path"
+	uci set agent_gateway.main.jwt_jwks_file=/etc/agent-gw/nexus-cloud-jwks.json
+	uci set agent_gateway.main.jwt_jwks_ca_file="$ca_file"
+	uci set agent_gateway.main.cloud_public_origin="$enrollment_url"
+	uci set agent_gateway.main.cloud_trust_ca_file="$ca_file"
+	uci set agent_gateway.main.jwt_issuer="$issuer"
+	uci set agent_gateway.main.jwt_audience="$audience"
+	uci commit agent_gateway
+	# Enrollment must not publish an online Relay state while agent-gw still
+	# trusts a fixed cache from a previous cloud/key generation.  Stop the
+	# periodic refresher, install and validate the current Server JWKS
+	# synchronously, then resume periodic refresh.  The updater atomically
+	# replaces the cache and emits the bounded Gateway runtime reload event.
+	/etc/init.d/agent-jwks stop >/dev/null 2>&1 || true
+	/usr/sbin/agent-jwks-update || return 1
+	/etc/init.d/agent-jwks start >/dev/null 2>&1 || return 1
+	return 0
+}
+
+synchronize_gateway_cloud_trust() {
+	local current_origin current_ca_file changed=0
+	case "$enrollment_url" in https://*/*) return 1 ;; https://*) ;; *) return 1 ;; esac
+	case "$ca_file" in /etc/ssl/certs/*|/etc/agent-gw/*) ;; *) return 1 ;; esac
+	[ -f "$ca_file" ] && [ ! -L "$ca_file" ] || return 1
+	current_origin="$(uci -q get agent_gateway.main.cloud_public_origin 2>/dev/null || true)"
+	current_ca_file="$(uci -q get agent_gateway.main.cloud_trust_ca_file 2>/dev/null || true)"
+	if [ "$current_origin" != "$enrollment_url" ]; then
+		uci set agent_gateway.main.cloud_public_origin="$enrollment_url" || return 1
+		changed=1
+	fi
+	if [ "$current_ca_file" != "$ca_file" ]; then
+		uci set agent_gateway.main.cloud_trust_ca_file="$ca_file" || return 1
+		changed=1
+	fi
+	[ "$changed" -eq 1 ] || return 0
+	uci commit agent_gateway || return 1
+	ubus call service event \
+		'{"type":"config.change","data":{"package":"agent_gateway"}}' \
+		>/dev/null 2>&1 || return 1
+}
+
+configure_relay_directory() {
+	local filename="$1" content endpoint public_key key_id issuer source_router_id directory_url relay_ca attempt
+	local relay_generation relay_status applied_generation relay_enabled
+	local relay_available=''
+	local client_certificate_fingerprint device_token_fingerprint directory_ca_fingerprint
+	local gateway_apply_required gateway_roll_generation gateway_health gateway_ready
+	local gateway_apply_generation gateway_loaded_generation
+	content="$(cat "$filename" 2>/dev/null || true)"
+	json_load "$content" >/dev/null 2>&1 || {
+		log "Relay configuration rejected at json"
+		return 1
+	}
+	json_select data >/dev/null 2>&1 || {
+		log "Relay configuration rejected at data"
+		return 1
+	}
+	json_select relay_directory >/dev/null 2>&1 || {
+		log "Relay configuration rejected at relay_directory"
+		return 1
+	}
+	json_get_var relay_available available
+	case "$relay_available" in
+		0|false)
+			STATUS_CLOUD_RELAY_AVAILABLE=0
+			STATUS_LOCAL_RELAY_ENABLED=0
+			LAST_ERROR_CODE=RELAY_NOT_CONFIGURED
+			log "Cloud Relay is not configured"
+			return 1
+			;;
+	esac
+	STATUS_CLOUD_RELAY_AVAILABLE=1
+	json_get_var endpoint endpoint
+	json_select forwarding >/dev/null 2>&1 || {
+		log "Relay configuration rejected at forwarding"
+		return 1
+	}
+	json_get_var public_key public_key
+	json_get_var key_id key_id
+	json_get_var issuer issuer
+	json_get_var source_router_id source_router_id
+	json_select .. >/dev/null 2>&1 || {
+		log "Relay configuration rejected leaving forwarding"
+		return 1
+	}
+	json_select device_trust >/dev/null 2>&1 || {
+		log "Relay configuration rejected at device_trust"
+		return 1
+	}
+	json_get_var relay_ca ca_certificate
+	[ -n "$endpoint" ] && [ -n "$public_key" ] && [ -n "$key_id" ] &&
+		[ -n "$issuer" ] && [ -n "$source_router_id" ] || {
+		log "Relay configuration rejected: incomplete forwarding metadata"
+		return 1
+	}
+	[ -n "$relay_ca" ] || {
+		log "Relay configuration rejected: missing device trust CA"
+		return 1
+	}
+	case "$endpoint" in
+		https://*) directory_url="$endpoint" ;;
+		/api/*) directory_url="$base_url$endpoint" ;;
+		*) log "Relay configuration rejected: invalid Directory endpoint"; return 1 ;;
+	esac
+	safe_line "$directory_url" && safe_line "$key_id" && safe_line "$issuer" &&
+		safe_line "$source_router_id" || {
+		log "Relay configuration rejected: unsafe control metadata"
+		return 1
+	}
+	[ -r "$ca_file" ] || {
+		log "Relay configuration rejected: Directory trust is unreadable"
+		return 1
+	}
+	ensure_gateway_token || {
+		log "Relay configuration rejected: internal Gateway credential provisioning failed"
+		return 1
+	}
+	client_certificate_fingerprint="$(openssl x509 -in "$client_cert" -noout -fingerprint -sha256 2>/dev/null |
+		sed 's/^.*=//' | tr -d ':' | tr 'A-F' 'a-f')"
+	device_token_fingerprint="$(openssl dgst -sha256 "$token_file" 2>/dev/null |
+		awk '{print $NF}' | tr 'A-F' 'a-f')"
+	directory_ca_fingerprint="$(openssl dgst -sha256 "$ca_file" 2>/dev/null |
+		awk '{print $NF}' | tr 'A-F' 'a-f')"
+	case "$directory_ca_fingerprint" in
+		????????????????????????????????????????????????????????????????) ;;
+		*) log "Relay configuration rejected: Directory trust digest failed"; return 1 ;;
+	esac
+	case "$directory_ca_fingerprint" in
+		*[!0-9a-f]*) log "Relay configuration rejected: invalid Directory trust digest"; return 1 ;;
+	esac
+	relay_generation="$(
+		printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+			"$directory_url" "$public_key" "$key_id" "$issuer" \
+			"$source_router_id" "$relay_ca" \
+			"$directory_ca_fingerprint" "$client_certificate_fingerprint" \
+			"$device_token_fingerprint" "$GATEWAY_TOKEN_FINGERPRINT" |
+			openssl dgst -sha256 2>/dev/null | awk '{print $NF}' | tr 'A-F' 'a-f'
+	)"
+	case "$relay_generation" in
+		????????????????????????????????????????????????????????????????) ;;
+		*) log "Relay configuration rejected: generation digest failed"; return 1 ;;
+	esac
+	case "$relay_generation" in *[!0-9a-f]*) log "Relay configuration rejected: invalid generation digest"; return 1 ;; esac
+	# Periodic reconciliation must not rewrite UCI or emit config.change when
+	# the exact Relay generation is already loaded. Reapplying an unchanged
+	# generation restarts agentd and drops short Agent/public IPv6 leases.
+	if [ "$(uci -q get agent.main.relay_config_generation)" = "$relay_generation" ] &&
+		[ "$(uci -q get agent.main.relay_enabled)" = 1 ] &&
+		[ "$(uci -q get agent.main.relay_tunnel_enabled)" = 1 ] &&
+		[ "$(uci -q get agent.main.relay_directory_endpoints)" = "$directory_url" ] &&
+		[ "$(uci -q get agent.main.relay_directory_device_token_file)" = "$token_file" ] &&
+		[ "$(uci -q get agent.main.relay_directory_ca_file)" = "$ca_file" ] &&
+		[ "$(uci -q get agent.main.forwarding_key_id)" = "$key_id" ] &&
+		[ "$(uci -q get agent.main.forwarding_issuer)" = "$issuer" ] &&
+		[ "$(uci -q get agent.main.forwarding_source_router_id)" = "$source_router_id" ] &&
+		printf '%s' "$public_key" | cmp -s - /etc/agentd/nexus-cloud-forwarding.pem &&
+		printf '%s' "$relay_ca" | cmp -s - /etc/agentd/nexus-cloud-relay-ca.pem; then
+		gateway_apply_generation="$(
+			uci -q get agent_gateway.main.internal_invoke_generation 2>/dev/null || true
+		)"
+		gateway_health="$(curl -fsS --max-time 1 \
+			http://127.0.0.1:7788/healthz 2>/dev/null || true)"
+		gateway_ready=0
+		gateway_loaded_generation=''
+		if json_load "$gateway_health" >/dev/null 2>&1; then
+			json_get_var gateway_ready internal_invoke_ready
+			json_get_var gateway_loaded_generation internal_invoke_generation
+		fi
+		relay_status="$(ubus call agent relay 2>/dev/null || true)"
+		applied_generation=''
+		relay_enabled=0
+		if json_load "$relay_status" >/dev/null 2>&1; then
+			json_get_var applied_generation applied_generation
+			json_get_var relay_enabled enabled
+		fi
+		case "$gateway_ready:$gateway_loaded_generation:$applied_generation:$relay_enabled" in
+			"1:$gateway_apply_generation:$relay_generation:1"|\
+			"1:$gateway_apply_generation:$relay_generation:true"|\
+			"true:$gateway_apply_generation:$relay_generation:1"|\
+			"true:$gateway_apply_generation:$relay_generation:true")
+				STATUS_RELAY_CONFIG_GENERATION="$relay_generation"
+				STATUS_LOCAL_RELAY_ENABLED=1
+				log "Relay configuration generation unchanged"
+				return 0
+				;;
+		esac
+	fi
+	mkdir -p /etc/agentd || {
+		log "Relay configuration rejected: trust directory unavailable"
+		return 1
+	}
+	printf '%s' "$public_key" >/etc/agentd/nexus-cloud-forwarding.pem || {
+		log "Relay configuration rejected: forwarding trust write failed"
+		return 1
+	}
+	printf '%s' "$relay_ca" >/etc/agentd/nexus-cloud-relay-ca.pem || {
+		log "Relay configuration rejected: device trust write failed"
+		return 1
+	}
+	chmod 0644 /etc/agentd/nexus-cloud-forwarding.pem
+	chmod 0644 /etc/agentd/nexus-cloud-relay-ca.pem
+	uci set agent.main.peer_transport_enabled=1
+	uci set agent.main.relay_enabled=1
+	uci set agent.main.relay_tunnel_enabled=1
+	uci set agent.main.relay_directory_endpoints="$directory_url"
+	uci set agent.main.relay_directory_connect_ipv4s=''
+	uci set agent.main.relay_directory_device_token_file="$token_file"
+	uci set agent.main.relay_directory_ca_file="$ca_file"
+	uci set agent.main.peer_ca_file=/etc/agentd/nexus-cloud-relay-ca.pem
+	uci set agent.main.peer_client_cert="$client_cert"
+	uci set agent.main.peer_client_key="$client_key"
+	uci set agent.main.forwarding_assertion_required=1
+	uci set agent.main.forwarding_public_key=/etc/agentd/nexus-cloud-forwarding.pem
+	uci set agent.main.forwarding_key_id="$key_id"
+	uci set agent.main.forwarding_issuer="$issuer"
+	uci set agent.main.forwarding_source_router_id="$source_router_id"
+	uci set agent.main.relay_config_generation="$relay_generation"
+	uci set agent.main.relay_gateway_internal_enabled=1
+	uci set agent.main.relay_gateway_internal_endpoint='http://127.0.0.1:7788/agent/v1/internal-invoke'
+	uci set agent.main.relay_gateway_token_file="$GATEWAY_TOKEN_FILE"
+	gateway_apply_required="$GATEWAY_TOKEN_CHANGED"
+	[ "$(uci -q get agent_gateway.main.internal_invoke_enabled)" = 1 ] ||
+		gateway_apply_required=1
+	[ "$(uci -q get agent_gateway.main.internal_invoke_token_digest_file)" = "$GATEWAY_TOKEN_DIGEST_FILE" ] ||
+		gateway_apply_required=1
+	[ "$(uci -q get agent_gateway.main.invoke_enabled)" = 1 ] ||
+		gateway_apply_required=1
+	[ "$(uci -q get agent_gateway.main.registration_enabled)" = 1 ] ||
+		gateway_apply_required=1
+	[ "$(uci -q get agent_gateway.main.remote_backend_enabled)" = 1 ] ||
+		gateway_apply_required=1
+	gateway_roll_generation="$gateway_apply_required"
+	gateway_apply_generation="$(
+		uci -q get agent_gateway.main.internal_invoke_generation 2>/dev/null || true
+	)"
+	case "$gateway_apply_generation" in
+		????????????????????????????????) ;;
+		*) gateway_roll_generation=1 ;;
+	esac
+	case "$gateway_apply_generation" in
+		*[!0-9a-f]*) gateway_roll_generation=1 ;;
+	esac
+	if [ "$gateway_roll_generation" -eq 1 ]; then
+		gateway_apply_generation="$(
+			openssl rand -hex 16 2>/dev/null | tr -d '\r\n'
+		)"
+		case "$gateway_apply_generation" in
+			????????????????????????????????) ;;
+			*) log "Relay configuration rejected: Gateway generation failed"; return 1 ;;
+		esac
+		case "$gateway_apply_generation" in
+			*[!0-9a-f]*) log "Relay configuration rejected: invalid Gateway generation"; return 1 ;;
+		esac
+		gateway_apply_required=1
+	fi
+	uci set agent_gateway.main.invoke_enabled=1
+	uci set agent_gateway.main.registration_enabled=1
+	uci set agent_gateway.main.remote_backend_enabled=1
+	uci set agent_gateway.main.internal_invoke_enabled=1
+	uci set agent_gateway.main.internal_invoke_token_digest_file="$GATEWAY_TOKEN_DIGEST_FILE"
+	uci set agent_gateway.main.internal_invoke_generation="$gateway_apply_generation"
+	uci commit agent
+	uci commit agent_gateway
+	# Recover a previously interrupted apply: UCI may already contain the new
+	# public generation while the still-running Gateway reports the old one.
+	gateway_health="$(curl -fsS --max-time 1 \
+		http://127.0.0.1:7788/healthz 2>/dev/null || true)"
+	gateway_ready=0
+	gateway_loaded_generation=''
+	if json_load "$gateway_health" >/dev/null 2>&1; then
+		json_get_var gateway_ready internal_invoke_ready
+		json_get_var gateway_loaded_generation internal_invoke_generation
+	fi
+	case "$gateway_ready:$gateway_loaded_generation" in
+		"1:$gateway_apply_generation"|"true:$gateway_apply_generation") ;;
+		*) gateway_apply_required=1 ;;
+	esac
+	if [ "$gateway_apply_required" -eq 1 ]; then
+		ubus call service event \
+			'{"type":"config.change","data":{"package":"agent_gateway"}}' \
+			>/dev/null 2>&1 || {
+			log "Relay configuration rejected: Gateway apply event failed"
+			return 1
+		}
+	fi
+	# Agentd must never begin accepting Relay invokes before the loopback
+	# executor has loaded the intended public rollout generation. The random
+	# generation is not a credential and cannot authenticate an invoke; health
+	# never returns the token or its verifier digest.
+	attempt=0
+	while [ "$attempt" -lt 30 ]; do
+		gateway_health="$(curl -fsS --max-time 1 \
+			http://127.0.0.1:7788/healthz 2>/dev/null || true)"
+		gateway_ready=0
+		gateway_loaded_generation=''
+		if json_load "$gateway_health" >/dev/null 2>&1; then
+			json_get_var gateway_ready internal_invoke_ready
+			json_get_var gateway_loaded_generation internal_invoke_generation
+		fi
+		case "$gateway_ready:$gateway_loaded_generation" in
+			"1:$gateway_apply_generation"|"true:$gateway_apply_generation") break ;;
+		esac
+		attempt=$((attempt + 1))
+		sleep 1
+	done
+	[ "$attempt" -lt 30 ] || {
+		log "Relay configuration rejected: internal Gateway did not become ready"
+		return 1
+	}
+	# agentd is the sole owner of its procd lifecycle. Its existing UCI reload
+	# trigger observes the standard config.change event and recreates the
+	# instance. The uci CLI commit above persists state but does not publish
+	# that event, so emit it explicitly instead of invoking agentd's init script.
+	ubus call service event \
+		'{"type":"config.change","data":{"package":"agent"}}' \
+		>/dev/null 2>&1 || {
+		log "Relay configuration rejected: agentd apply event failed"
+		return 1
+	}
+	# The connector
+	# verifies the applied generation instead of racing that trigger with an
+	# independent init-script restart or inferring success from a PID change.
+	attempt=0
+	while [ "$attempt" -lt 60 ]; do
+		relay_status="$(ubus call agent relay 2>/dev/null || true)"
+		applied_generation=''
+		relay_enabled=0
+		if json_load "$relay_status" >/dev/null 2>&1; then
+			json_get_var applied_generation applied_generation
+			json_get_var relay_enabled enabled
+		fi
+		[ "$applied_generation" = "$relay_generation" ] &&
+			case "$relay_enabled" in 1|true) break ;; esac
+		attempt=$((attempt + 1))
+		sleep 1
+	done
+	[ "$attempt" -lt 60 ] || {
+		log "Relay configuration rejected: agentd did not apply the desired generation"
+		return 1
+	}
+	STATUS_RELAY_CONFIG_GENERATION="$relay_generation"
+	STATUS_LOCAL_RELAY_ENABLED=1
+	log "Relay configuration generation applied"
+	return 0
+}
+
+probe_cloud_relay_availability() {
+	local response=$RUNTIME_DIR/relay-availability.$$.response content available
+	STATUS_CLOUD_RELAY_AVAILABLE=''
+	if curl_request GET "$base_url/api/v1/edge/v1/relay-configuration/" '' "$response" 1; then
+		content="$(cat "$response" 2>/dev/null || true)"
+		if json_load "$content" >/dev/null 2>&1 &&
+			json_select data >/dev/null 2>&1 &&
+			json_select relay_directory >/dev/null 2>&1; then
+			json_get_var available available
+			case "$available" in
+				1|true) STATUS_CLOUD_RELAY_AVAILABLE=1 ;;
+				0|false) STATUS_CLOUD_RELAY_AVAILABLE=0 ;;
+			esac
+		fi
+	elif [ "$LAST_ERROR_CODE" = RELAY_NOT_CONFIGURED ]; then
+		STATUS_CLOUD_RELAY_AVAILABLE=0
+	fi
+	rm -f "$response"
+	# Relay discovery is advisory in forced Direct IPv6 mode. A temporary
+	# Cloud error must not interrupt a healthy Direct Agent lease.
+	return 0
+}
+
+refresh_relay_configuration() {
+	local response=$RUNTIME_DIR/relay-configuration.$$.response
+	if ! curl_request GET "$base_url/api/v1/edge/v1/relay-configuration/" '' "$response" 1; then
+		rm -f "$response"
+		return 1
+	fi
+	configure_relay_directory "$response" || {
+		rm -f "$response"
+		return 1
+	}
+	rm -f "$response"
+	return 0
+}
+
+disable_relay_configuration() {
+	local agent_changed=0 gateway_changed=0
+	# A router that is explicitly pinned to Direct IPv6 must not retain a
+	# previously provisioned Relay poller or its internal invoke path. Keep the
+	# agentd and Gateway halves in sync: agentd deliberately rejects an internal
+	# Relay Gateway when the Relay tunnel is disabled.
+	[ "$(uci -q get agent.main.relay_enabled)" = 0 ] || {
+		uci set agent.main.relay_enabled=0 || return 1
+		agent_changed=1
+	}
+	[ "$(uci -q get agent.main.relay_tunnel_enabled)" = 0 ] || {
+		uci set agent.main.relay_tunnel_enabled=0 || return 1
+		agent_changed=1
+	}
+	[ "$(uci -q get agent.main.relay_gateway_internal_enabled)" = 0 ] || {
+		uci set agent.main.relay_gateway_internal_enabled=0 || return 1
+		agent_changed=1
+	}
+	[ "$(uci -q get agent.main.forwarding_assertion_required)" = 0 ] || {
+		uci set agent.main.forwarding_assertion_required=0 || return 1
+		agent_changed=1
+	}
+	for option in relay_directory_endpoints relay_directory_connect_ipv4s relay_config_generation; do
+		if uci -q get "agent.main.$option" >/dev/null 2>&1; then
+			uci -q delete "agent.main.$option" || return 1
+			agent_changed=1
+		fi
+	done
+	[ "$(uci -q get agent_gateway.main.internal_invoke_enabled)" = 0 ] || {
+		uci set agent_gateway.main.internal_invoke_enabled=0 || return 1
+		gateway_changed=1
+	}
+	STATUS_LOCAL_RELAY_ENABLED=0
+	STATUS_RELAY_READY=0
+	[ "$agent_changed" -eq 1 ] || [ "$gateway_changed" -eq 1 ] || return 0
+	[ "$agent_changed" -eq 0 ] || uci commit agent || return 1
+	[ "$gateway_changed" -eq 0 ] || uci commit agent_gateway || return 1
+	if [ "$gateway_changed" -eq 1 ]; then
+		ubus call service event \
+			'{"type":"config.change","data":{"package":"agent_gateway"}}' \
+			>/dev/null 2>&1 || return 1
+	fi
+	if [ "$agent_changed" -eq 1 ]; then
+		ubus call service event \
+			'{"type":"config.change","data":{"package":"agent"}}' \
+			>/dev/null 2>&1 || return 1
+	fi
+	log "Relay configuration disabled for forced Direct IPv6 mode"
+	return 0
+}
+
+certificate_thumbprint() {
+	local fingerprint
+	if [ -n "$device_cert_sha256" ]; then
+		fingerprint="$(printf '%s' "$device_cert_sha256" | tr 'A-F' 'a-f')"
+	else
+		[ -r "$client_cert" ] || return 1
+		fingerprint="$(openssl x509 -in "$client_cert" -noout -fingerprint -sha256 2>/dev/null |
+			sed 's/^.*=//' | tr -d ':' | tr 'A-F' 'a-f')"
+	fi
+	case "$fingerprint" in
+		????????????????????????????????????????????????????????????????) ;;
+		*) return 1 ;;
+	esac
+	case "$fingerprint" in *[!0-9a-f]*) return 1 ;; esac
+	printf '%s' "$fingerprint"
+}
+
+prepare_managed_identity() {
+	local temporary=$client_key.tmp.$$ csr=$RUNTIME_DIR/device.$$.csr subject
+	[ "$identity_mode" = managed ] || return 1
+	if [ ! -s "$client_key" ]; then
+		mkdir -p /etc/nexus-cloud && chmod 0700 /etc/nexus-cloud
+		openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$temporary" >/dev/null 2>&1 || return 1
+		chmod 0600 "$temporary" && mv -f "$temporary" "$client_key" || return 1
+	fi
+	subject="/O=Nexus Edge/CN=$router_id"
+	openssl req -new -key "$client_key" -subj "$subject" -out "$csr" >/dev/null 2>&1 || return 1
+	chmod 0600 "$csr"
+	printf '%s' "$csr"
+}
+
+json_device_identity_value() {
+	local filename="$1" name="$2" content value
+	content="$(cat "$filename" 2>/dev/null || true)"
+	json_load "$content" >/dev/null 2>&1 || return 1
+	json_select data >/dev/null 2>&1 || return 1
+	json_select device_identity >/dev/null 2>&1 || return 1
+	json_get_var value "$name"
+	[ -n "$value" ] || return 1
+	printf '%s' "$value"
+}
+
+certificate_key_matches() {
+	local certificate="$1" key="$2" cert_public=$RUNTIME_DIR/cert-public.$$ key_public=$RUNTIME_DIR/key-public.$$
+	openssl x509 -in "$certificate" -pubkey -noout >"$cert_public" 2>/dev/null || return 1
+	openssl pkey -in "$key" -pubout >"$key_public" 2>/dev/null || return 1
+	cmp -s "$cert_public" "$key_public"
+	local result=$?
+	rm -f "$cert_public" "$key_public"
+	return "$result"
+}
+
+install_managed_identity() {
+	local response="$1" chain ca expected actual temporary ca_temporary
+	chain="$(json_device_identity_value "$response" certificate_chain)" || return 1
+	ca="$(json_device_identity_value "$response" ca_certificate)" || return 1
+	expected="$(json_device_identity_value "$response" sha256)" || return 1
+	temporary=$client_cert.tmp.$$
+	ca_temporary=/etc/nexus-cloud/device-ca.crt.tmp.$$
+	printf '%s' "$chain" >"$temporary" && chmod 0600 "$temporary" || return 1
+	printf '%s' "$ca" >"$ca_temporary" && chmod 0644 "$ca_temporary" || return 1
+	openssl verify -purpose sslclient -CAfile "$ca_temporary" "$temporary" >/dev/null 2>&1 || return 1
+	certificate_key_matches "$temporary" "$client_key" || return 1
+	actual="$(openssl x509 -in "$temporary" -noout -fingerprint -sha256 2>/dev/null |
+		sed 's/^.*=//' | tr -d ':' | tr 'A-F' 'a-f')"
+	[ "$actual" = "$expected" ] || return 1
+	mv -f "$temporary" "$client_cert" && mv -f "$ca_temporary" /etc/nexus-cloud/device-ca.crt || return 1
+	return 0
+}
+
+renew_managed_identity() {
+	local csr_file payload=$RUNTIME_DIR/renew.$$.json response=$RUNTIME_DIR/renew.$$.response
+	local confirm=$RUNTIME_DIR/confirm.$$.response
+	[ "$identity_mode" = managed ] || return 0
+	[ -s "$client_cert" ] && [ -s "$client_key" ] || return 0
+	openssl x509 -checkend 2592000 -in "$client_cert" -noout >/dev/null 2>&1 && return 0
+	csr_file="$(prepare_managed_identity)" || return 1
+	json_init
+	json_add_string device_csr "$(cat "$csr_file")"
+	json_dump >"$payload" || return 1
+	if ! curl_request POST "$base_url/api/v1/edge/v1/device-certificate/renew/" "$payload" "$response" 1; then
+		rm -f "$csr_file" "$payload" "$response"
+		return 1
+	fi
+	install_managed_identity "$response" || {
+		rm -f "$csr_file" "$payload" "$response"
+		return 1
+	}
+	if ! curl_request POST "$base_url/api/v1/edge/v1/device-certificate/confirm/" '' "$confirm" 1; then
+		write_status certificate_confirmation_failed "The renewed certificate was installed but Cloud confirmation failed; retry before the rotation grace period expires." 0 0 0
+		rm -f "$csr_file" "$payload" "$response" "$confirm"
+		return 1
+	fi
+	rm -f "$csr_file" "$payload" "$response" "$confirm"
+	log "managed device certificate renewed and confirmed"
+	return 0
+}
+
+json_ingress_identity_value() {
+	local filename="$1" name="$2" content value
+	content="$(cat "$filename" 2>/dev/null || true)"
+	json_load "$content" >/dev/null 2>&1 || return 1
+	json_select data >/dev/null 2>&1 || return 1
+	json_select ingress_identity >/dev/null 2>&1 || return 1
+	json_get_var value "$name"
+	[ -n "$value" ] || return 1
+	printf '%s' "$value"
+}
+
+valid_ingress_descriptor() {
+	local tls_name="$1" bundle_id="$2"
+	[ -n "$tls_name" ] && [ "${#tls_name}" -le 253 ] && safe_line "$tls_name" || return 1
+	case "$tls_name" in
+		*[!a-z0-9.-]*|.*|*.|*..*) return 1 ;;
+	esac
+	[ -n "$bundle_id" ] && [ "${#bundle_id}" -le 63 ] && safe_line "$bundle_id" || return 1
+	case "$bundle_id" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+	return 0
+}
+
+ingress_listener_ready() {
+	netstat -ln 2>/dev/null | awk -v port=":$public_ingress_port" '
+		$1 ~ /^tcp/ && $4 ~ (port "$") && $6 == "LISTEN" { found=1 }
+		END { exit found ? 0 : 1 }
+	'
+}
+
+ingress_credentials_ready() {
+	[ "$public_transport" = mtls ] && [ "$mtls_enabled" -eq 1 ] || return 1
+	[ "$public_descriptor_enabled" -eq 1 ] || return 1
+	valid_ingress_descriptor "$public_tls_server_name" "$public_ca_bundle_id" || return 1
+	[ -r "$mtls_server_cert" ] && [ ! -L "$mtls_server_cert" ] || return 1
+	[ -r "$mtls_server_key" ] && [ ! -L "$mtls_server_key" ] || return 1
+	[ -r "$mtls_client_ca" ] && [ ! -L "$mtls_client_ca" ] || return 1
+	openssl x509 -checkend 0 -in "$mtls_server_cert" -noout >/dev/null 2>&1 || return 1
+	openssl x509 -checkhost "$public_tls_server_name" -in "$mtls_server_cert" -noout >/dev/null 2>&1 || return 1
+	openssl verify -purpose sslserver -CAfile "$mtls_client_ca" "$mtls_server_cert" >/dev/null 2>&1 || return 1
+	certificate_key_matches "$mtls_server_cert" "$mtls_server_key" || return 1
+	return 0
+}
+
+managed_ingress_identity_matches_node() {
+	local current_node normalized expected
+	[ -s "$node_id_file" ] && [ ! -L "$node_id_file" ] || return 1
+	current_node="$(cat "$node_id_file" 2>/dev/null || true)"
+	case "$current_node" in
+		????????-????-????-????-????????????) ;;
+		*) return 1 ;;
+	esac
+	case "$current_node" in *[!0-9a-f-]*) return 1 ;; esac
+	normalized="$(printf '%s' "$current_node" | tr -d '-')"
+	[ "${#normalized}" -eq 32 ] || return 1
+	expected="edge-${normalized}.router.nexus"
+	[ "$public_tls_server_name" = "$expected" ] || return 1
+	openssl x509 -checkhost "$expected" -in "$mtls_server_cert" -noout >/dev/null 2>&1
+}
+
+direct_ingress_ready() {
+	ingress_credentials_ready && ingress_listener_ready
+}
+
+prepare_managed_ingress_identity() {
+	local temporary=$MANAGED_INGRESS_KEY.tmp.$$ csr=$RUNTIME_DIR/ingress.$$.csr subject
+	[ "$identity_mode" = managed ] || return 1
+	mkdir -p "$MANAGED_INGRESS_DIR" && chmod 0700 "$MANAGED_INGRESS_DIR" || return 1
+	if [ ! -s "$MANAGED_INGRESS_KEY" ] || [ -L "$MANAGED_INGRESS_KEY" ]; then
+		openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$temporary" >/dev/null 2>&1 || return 1
+		chmod 0600 "$temporary" && mv -f "$temporary" "$MANAGED_INGRESS_KEY" || return 1
+	fi
+	chmod 0600 "$MANAGED_INGRESS_KEY" || return 1
+	subject="/O=Nexus Edge/CN=$router_id Direct ingress"
+	openssl req -new -key "$MANAGED_INGRESS_KEY" -subj "$subject" -out "$csr" >/dev/null 2>&1 || return 1
+	chmod 0600 "$csr"
+	printf '%s' "$csr"
+}
+
+wait_for_ingress_listener() {
+	local attempt=0
+	while [ "$attempt" -lt 30 ]; do
+		ingress_listener_ready && return 0
+		attempt=$((attempt + 1))
+		sleep 1
+	done
+	return 1
+}
+
+apply_ingress_configuration() {
+	# Both agent-gw and agent-edge subscribe to this UCI package trigger. A
+	# Connector managed by procd must not invoke their rc.common scripts
+	# directly: procd_lock expects the init-script lock descriptor and fails
+	# from an ordinary service child process.
+	ubus call service event \
+		'{"type":"config.change","data":{"package":"agent_gateway"}}' \
+		>/dev/null 2>&1 || return 1
+	wait_for_ingress_listener
+}
+
+install_managed_ingress_identity() {
+	local response="$1" chain ca expected actual tls_name bundle_id
+	local cert_temporary=$MANAGED_INGRESS_CERT.tmp.$$ ca_temporary=$MANAGED_INGRESS_CLIENT_CA.tmp.$$
+	chain="$(json_ingress_identity_value "$response" certificate_chain)" || return 1
+	ca="$(json_ingress_identity_value "$response" ca_certificate)" || return 1
+	expected="$(json_ingress_identity_value "$response" sha256)" || return 1
+	tls_name="$(json_ingress_identity_value "$response" tls_server_name)" || return 1
+	bundle_id="$(json_ingress_identity_value "$response" ca_bundle_id)" || return 1
+	valid_ingress_descriptor "$tls_name" "$bundle_id" || return 1
+	case "$expected" in
+		????????????????????????????????????????????????????????????????) ;;
+		*) return 1 ;;
+	esac
+	case "$expected" in *[!0-9a-f]*) return 1 ;; esac
+	mkdir -p "$MANAGED_INGRESS_DIR" && chmod 0700 "$MANAGED_INGRESS_DIR" || return 1
+	printf '%s' "$chain" >"$cert_temporary" && chmod 0644 "$cert_temporary" || return 1
+	printf '%s' "$ca" >"$ca_temporary" && chmod 0644 "$ca_temporary" || return 1
+	openssl verify -purpose sslserver -CAfile "$ca_temporary" "$cert_temporary" >/dev/null 2>&1 || return 1
+	openssl x509 -checkhost "$tls_name" -in "$cert_temporary" -noout >/dev/null 2>&1 || return 1
+	certificate_key_matches "$cert_temporary" "$MANAGED_INGRESS_KEY" || return 1
+	actual="$(openssl x509 -in "$cert_temporary" -noout -fingerprint -sha256 2>/dev/null |
+		sed 's/^.*=//' | tr -d ':' | tr 'A-F' 'a-f')"
+	[ "$actual" = "$expected" ] || return 1
+	mv -f "$cert_temporary" "$MANAGED_INGRESS_CERT" &&
+		mv -f "$ca_temporary" "$MANAGED_INGRESS_CLIENT_CA" || return 1
+	chmod 0600 "$MANAGED_INGRESS_KEY" && chmod 0644 "$MANAGED_INGRESS_CERT" "$MANAGED_INGRESS_CLIENT_CA" || return 1
+	uci set agent_gateway.main.public_transport=mtls || return 1
+	uci set agent_gateway.main.mtls_enabled=1 || return 1
+	uci set agent_gateway.main.mtls_server_cert="$MANAGED_INGRESS_CERT" || return 1
+	uci set agent_gateway.main.mtls_server_key="$MANAGED_INGRESS_KEY" || return 1
+	uci set agent_gateway.main.mtls_client_ca="$MANAGED_INGRESS_CLIENT_CA" || return 1
+	uci set agent_gateway.main.public_descriptor_enabled=1 || return 1
+	uci set agent_gateway.main.public_tls_server_name="$tls_name" || return 1
+	uci set agent_gateway.main.public_ca_bundle_id="$bundle_id" || return 1
+	uci commit agent_gateway || return 1
+	public_transport=mtls
+	mtls_enabled=1
+	mtls_server_cert=$MANAGED_INGRESS_CERT
+	mtls_server_key=$MANAGED_INGRESS_KEY
+	mtls_client_ca=$MANAGED_INGRESS_CLIENT_CA
+	public_descriptor_enabled=1
+	public_tls_server_name=$tls_name
+	public_ca_bundle_id=$bundle_id
+	apply_ingress_configuration || return 1
+	return 0
+}
+
+renew_managed_ingress_identity() {
+	local csr_file payload=$RUNTIME_DIR/ingress-renew.$$.json response=$RUNTIME_DIR/ingress-renew.$$.response
+	[ "$cloud_transport" != relay ] || return 0
+	[ "$identity_mode" = managed ] || return 1
+	if [ "$FORCE_MANAGED_INGRESS_RENEWAL" -eq 0 ] &&
+		ingress_credentials_ready &&
+		managed_ingress_identity_matches_node &&
+		openssl x509 -checkend 2592000 -in "$mtls_server_cert" -noout >/dev/null 2>&1; then
+		if ! ingress_listener_ready; then
+			apply_ingress_configuration || return 1
+		fi
+		return 0
+	fi
+	csr_file="$(prepare_managed_ingress_identity)" || return 1
+	json_init
+	json_add_string ingress_csr "$(cat "$csr_file")"
+	json_dump >"$payload" || return 1
+	if ! curl_request POST "$base_url/api/v1/edge/v1/ingress-certificate/renew/" "$payload" "$response" 1; then
+		rm -f "$csr_file" "$payload" "$response"
+		return 1
+	fi
+	install_managed_ingress_identity "$response" || {
+		rm -f "$csr_file" "$payload" "$response"
+		return 1
+	}
+	FORCE_MANAGED_INGRESS_RENEWAL=0
+	rm -f "$csr_file" "$payload" "$response"
+	log "managed Direct IPv6 ingress certificate installed"
+	return 0
+}
+
+enroll_node() {
+	local payload=$RUNTIME_DIR/enroll.$$.json response=$RUNTIME_DIR/enroll.$$.response
+	local fingerprint release device_token node_id tenant_id temporary csr_file='' edge_base_url
+	[ -n "$pairing_code" ] || {
+		write_status pairing_required "Paste a one-time pairing code from Nexus Console." 0 0 0
+		return 1
+	}
+	if [ "$REENROLLING" -eq 1 ] && [ "$identity_mode" = managed ]; then
+		csr_file="$(prepare_managed_identity)" || {
+			write_status certificate_generation_failed "Could not generate the replacement device certificate request." 0 0 0
+			return 1
+		}
+		fingerprint=''
+	elif fingerprint="$(certificate_thumbprint 2>/dev/null)" && [ -r "$client_key" ] &&
+		certificate_key_matches "$client_cert" "$client_key"; then
+		:
+	elif [ "$identity_mode" = managed ]; then
+		if [ -s "$client_cert" ]; then
+			write_status certificate_key_mismatch "The saved device certificate does not match its private key. Remove or repair the managed identity before pairing." 0 0 0
+			return 1
+		fi
+		csr_file="$(prepare_managed_identity)" || {
+			write_status certificate_generation_failed "Could not generate the local device key and certificate request." 0 0 0
+			return 1
+		}
+		fingerprint=''
+	else
+		write_status certificate_required "Manual identity requires a readable device certificate and private key." 0 0 0
+		return 1
+	fi
+	release="$(. /etc/openwrt_release 2>/dev/null; printf '%s' "${DISTRIB_RELEASE:-unknown}")"
+	[ -n "$display_name" ] || display_name="$(uci -q get system.@system[0].hostname || printf '%s' "$router_id")"
+	json_init
+	json_add_string pairing_code "$pairing_code"
+	json_add_string router_id "$router_id"
+	json_add_string domain_id "$domain_id"
+	json_add_string display_name "$display_name"
+	case "$cloud_transport" in
+		relay) json_add_string connectivity_mode relay ;;
+		*) json_add_string connectivity_mode direct_ipv6 ;;
+	esac
+	case "$public_ipv6_mode" in upstream-relay) json_add_string ipv6_mode upstream_relay ;; *) json_add_string ipv6_mode routed_prefix ;; esac
+	json_add_string software_version "$release"
+	if [ -n "$csr_file" ]; then
+		json_add_string device_csr "$(cat "$csr_file")"
+	else
+		json_add_string device_cert_thumbprint "$fingerprint"
+	fi
+	json_add_object capabilities
+	json_add_boolean cloud_agent_sync 1
+	json_add_boolean router_presence_v1 1
+	[ "$cloud_transport" = relay ] && json_add_boolean public_ipv6 0 || json_add_boolean public_ipv6 1
+	[ "$cloud_transport" = direct_ipv6 ] && json_add_boolean relay 0 || json_add_boolean relay 1
+	if [ "$cloud_transport" = direct_ipv6 ]; then
+		json_add_boolean runtime_context_v1 1
+		json_add_boolean invoke_interactions_v1 1
+		json_add_boolean mcp_stream_v1 1
+		json_add_boolean mcp_tasks_v1 1
+		json_add_boolean caller_mobile_v1 1
+		json_add_boolean durable_recovery_v1 1
+	else
+		json_add_boolean runtime_context_v1 0
+		json_add_boolean invoke_interactions_v1 0
+		json_add_boolean mcp_stream_v1 0
+		json_add_boolean mcp_tasks_v1 0
+		json_add_boolean caller_mobile_v1 0
+		json_add_boolean durable_recovery_v1 0
+	fi
+	json_close_object
+	json_dump >"$payload" || return 1
+	if ! curl_request POST "$enrollment_url/api/v1/edge/nodes/enroll/" "$payload" "$response" 0; then
+		rm -f "$csr_file"
+		if [ "$LAST_ERROR_CODE" = RELAY_NOT_CONFIGURED ]; then
+			STATUS_CLOUD_RELAY_AVAILABLE=0
+			write_status relay_not_configured "Nexus Cloud Relay is not configured. Select Direct IPv6 or ask the Cloud administrator to enable Relay." 0 0 0
+		else
+			write_status enrollment_failed "Nexus Cloud enrollment failed." 0 0 0
+		fi
+		return 1
+	fi
+	if [ "$REENROLLING" -eq 1 ]; then
+		# The new one-time exchange succeeded. Retire the old leases while the
+		# old credential and certificate are still installed, then atomically
+		# replace them below. A failed exchange leaves the old identity intact.
+		withdraw_all || true
+		withdraw_presence || true
+	fi
+	if [ -n "$csr_file" ]; then
+		install_managed_identity "$response" || {
+			rm -f "$csr_file" "$payload" "$response"
+			write_status certificate_install_failed "The cloud-issued device certificate failed local validation." 0 0 0
+			return 1
+		}
+	fi
+	device_token="$(json_data_value "$response" device_token)" || return 1
+	node_id="$(json_data_value "$response" id)" || return 1
+	tenant_id="$(json_data_value "$response" tenant_id)" || return 1
+	edge_base_url="$(json_data_value "$response" edge_base_url 2>/dev/null || true)"
+	[ -n "$edge_base_url" ] || edge_base_url="$base_url"
+	edge_base_url="${edge_base_url%/}"
+	case "$edge_base_url" in https://*/*) return 1 ;; https://*) ;; *) return 1 ;; esac
+	case "$edge_base_url" in *'"'*|*'\'*|*" "*|*"	"*|*"
+"*|*""*) return 1 ;; esac
+	case "$device_token" in edge_[A-Za-z0-9_-]*) ;; *) return 1 ;; esac
+	safe_line "$node_id" || return 1
+	valid_cloud_tenant_id "$tenant_id" || return 1
+	# Enrollment is a one-shot credential exchange.  Persist the accepted
+	# device identity before any Gateway/JWKS/Relay apply step can emit service
+	# events or fail.  A restarted connector must resume with the device token;
+	# it must never consume the pairing code a second time.
+	mkdir -p /etc/nexus-cloud && chmod 0700 /etc/nexus-cloud
+	temporary=$token_file.tmp.$$
+	printf '%s\n' "$device_token" >"$temporary" && chmod 0600 "$temporary" && mv -f "$temporary" "$token_file" || return 1
+	temporary=$node_id_file.tmp.$$
+	printf '%s\n' "$node_id" >"$temporary" && chmod 0600 "$temporary" && mv -f "$temporary" "$node_id_file" || return 1
+	install_cloud_tenant_id "$tenant_id" || return 1
+	uci set nexus_cloud.main.enrollment_url="$enrollment_url"
+	uci set nexus_cloud.main.base_url="$edge_base_url"
+	uci -q delete nexus_cloud.main.pairing_code
+	uci commit nexus_cloud
+	base_url="$edge_base_url"
+	pairing_code=''
+	REENROLLING=0
+	configure_edge_auth "$response" || {
+		write_status auth_configuration_failed "The cloud Edge JWT configuration was rejected." 0 0 0
+		return 1
+	}
+	if [ "$cloud_transport" != direct_ipv6 ] && ! configure_relay_directory "$response"; then
+		if [ "$cloud_transport" = relay ]; then
+			write_status relay_configuration_failed "The Relay Directory or NFA trust configuration was rejected." 0 0 0
+			return 1
+		fi
+		log "Relay configuration unavailable; auto mode will retain Direct IPv6 only."
+	fi
+	rm -f "$csr_file" "$payload" "$response"
+	write_status enrolled "Router enrolled. Waiting for eligible Direct IPv6 or Relay Agents." 0 0 0
+	log "router enrollment completed"
+	return 0
+}
+
+next_generation() {
+	local generation=0 temporary
+	[ -r "$GENERATION_FILE" ] && generation="$(cat "$GENERATION_FILE" 2>/dev/null || printf 0)"
+	case "$generation" in ''|*[!0-9]*) generation=0 ;; esac
+	generation=$((generation + 1))
+	temporary=$GENERATION_FILE.tmp.$$
+	printf '%s\n' "$generation" >"$temporary" && chmod 0600 "$temporary" && mv -f "$temporary" "$GENERATION_FILE" || return 1
+	printf '%s' "$generation"
+}
+
+extract_snapshot() {
+	local snapshot_dir="$1" agents_json="$snapshot_dir/agents.json" addresses_json="$snapshot_dir/addresses.json"
+	local relay_json="$snapshot_dir/relay.json" stats_json="$snapshot_dir/stats.json"
+	local content keys key route_id address truncated origin healthy capability_keys capability_key intent first_route agent_dir
+	local assignment_active assignment_id relay_id relay_tunnels_up remaining_ms
+	SNAPSHOT_ERROR_STAGE=agent_list
+	ubus call agent agents '{"limit":200}' >"$agents_json" || return 1
+	SNAPSHOT_ERROR_STAGE=address_list
+	ubus call agent addresses '{}' >"$addresses_json" || return 1
+	ubus call agent relay '{}' >"$relay_json" 2>/dev/null || printf '{}' >"$relay_json"
+	ubus call agent stats '{}' >"$stats_json" 2>/dev/null || printf '{}' >"$stats_json"
+
+	assignment_active=0
+	assignment_id=''
+	relay_id=''
+	remaining_ms=0
+	content="$(cat "$relay_json")"
+	if json_load "$content" >/dev/null 2>&1; then
+		json_get_var assignment_active assignment_active
+		json_get_var assignment_id assignment_id
+		json_get_var relay_id relay_id
+		json_get_var remaining_ms assignment_remaining_ms
+	fi
+	relay_tunnels_up=0
+	content="$(cat "$stats_json")"
+	if json_load "$content" >/dev/null 2>&1; then
+		json_get_var relay_tunnels_up relay_tunnels_up
+	fi
+	printf '%s\t%s\t%s\t%s\t%s\n' "$assignment_active" "$relay_id" "$assignment_id" "$remaining_ms" "$relay_tunnels_up" >"$snapshot_dir/relay.tsv"
+
+	SNAPSHOT_ERROR_STAGE=address_document
+	content="$(cat "$addresses_json")"
+	json_load "$content" || return 1
+	json_select addresses || return 1
+	json_get_keys keys
+	: >"$snapshot_dir/addresses.tsv"
+	for key in $keys; do
+		json_select "$key"
+		json_get_var route_id route_id
+		json_get_var address public_ipv6
+		if safe_line "$route_id" && safe_line "$address" && [ -n "$route_id" ] && [ -n "$address" ]; then
+			printf '%s\t%s\n' "$route_id" "$address" >>"$snapshot_dir/addresses.tsv"
+		fi
+		json_select ..
+	done
+
+	SNAPSHOT_ERROR_STAGE=agent_document
+	content="$(cat "$agents_json")"
+	json_load "$content" || return 1
+	json_get_var truncated truncated
+	[ "$truncated" = 0 ] || [ "$truncated" = false ] || return 1
+	json_select agents || return 1
+	json_get_keys keys
+	: >"$snapshot_dir/local-origins"
+	for key in $keys; do
+		json_select "$key"
+		json_get_var origin agent_id
+		json_get_var healthy healthy
+		if ! safe_line "$origin" || [ -z "$origin" ]; then
+			json_select ..
+			continue
+		fi
+		if grep -Fqx -e "$origin" "$snapshot_dir/local-origins"; then
+			json_select ..
+			continue
+		fi
+		agent_dir=$snapshot_dir/agent-$key
+		mkdir -p "$agent_dir"
+		printf '%s\n' "$origin" >"$agent_dir/origin"
+		printf '%s\n' "$healthy" >"$agent_dir/healthy"
+		printf '%s\n' "$origin" >>"$snapshot_dir/local-origins"
+		: >"$agent_dir/capabilities"
+		: >"$agent_dir/dynamic-tools.tsv"
+		first_route=''
+		if json_select capabilities; then
+			json_get_keys capability_keys
+			for capability_key in $capability_keys; do
+				json_select "$capability_key"
+				json_get_var intent intent
+				json_get_var route_id route_id
+				if safe_line "$intent" && safe_line "$route_id" && [ -n "$intent" ] && [ -n "$route_id" ]; then
+					printf '%s\t%s\n' "$intent" "$route_id" >>"$agent_dir/capabilities"
+					[ -n "$first_route" ] || first_route="$route_id"
+				fi
+				json_select ..
+			done
+			json_select ..
+		fi
+		printf '%s\n' "$first_route" >"$agent_dir/route-id"
+		json_select ..
+	done
+	SNAPSHOT_ERROR_STAGE=manifest_document
+	extract_cloud_manifests "$snapshot_dir" || return 1
+	SNAPSHOT_ERROR_STAGE=''
+}
+
+add_mcp_tool_mapping() {
+	local section="$1" enabled protocol authority selector intent version title description input_schema_json
+	local task continuable recovery_protocol demo chat interactive selector64 signature
+	config_get_bool enabled "$section" enabled 0
+	config_get protocol "$section" protocol ''
+	config_get authority "$section" authority ''
+	[ "$enabled" -eq 1 ] && [ "$protocol" = mcp ] && [ "$authority" = "$MCP_TOOL_ORIGIN" ] || return 0
+	config_get selector "$section" selector ''
+	config_get intent "$section" intent ''
+	config_get version "$section" version 1
+	config_get title "$section" title ''
+	config_get description "$section" description ''
+	config_get input_schema_json "$section" input_schema_json '{"type":"object","additionalProperties":true}'
+	config_get_bool task "$section" task 0
+	config_get_bool continuable "$section" continuable 0
+	config_get recovery_protocol "$section" recovery_protocol 0
+	config_get_bool demo "$section" demo 0
+	config_get_bool chat "$section" chat 0
+	config_get_bool interactive "$section" interactive 0
+	[ -n "$selector" ] && [ -n "$intent" ] || return 0
+	case "$version" in ''|*[!0-9]*) return 0 ;; esac
+	case "$recovery_protocol" in 0|1) ;; *) return 0 ;; esac
+	json_add_object ''
+	json_add_string name "$selector"
+	[ -z "$title" ] || json_add_string title "$title"
+	[ -z "$description" ] || json_add_string description "$description"
+	json_add_string input_schema_json "$input_schema_json"
+	json_add_string intent "$intent"
+	json_add_int intent_version "$version"
+	json_add_boolean task "$task"
+	json_add_boolean continuable "$continuable"
+	json_add_int recovery_protocol "$recovery_protocol"
+	json_add_boolean demo "$demo"
+	json_add_boolean chat "$chat"
+	json_add_boolean interactive "$interactive"
+	json_close_object
+	selector64="$(b64_encode "$selector")" || return 1
+	signature="$(mapping_signature \
+		"$selector64" "$(b64_encode "$title")" \
+		"$(b64_encode "$description")" "$(b64_encode "$input_schema_json")" \
+		"$(b64_encode "$intent")" "$version" "$task" "$continuable" "$recovery_protocol" \
+		"$demo" "$chat" "$interactive")" || return 1
+	printf '%s\t%s\n' "$selector64" "$signature" >>"$MCP_STATIC_MAPPINGS"
+	MCP_TOOL_COUNT=$((MCP_TOOL_COUNT + 1))
+}
+
+mapping_signature() {
+	local value
+	for value in "$@"; do
+		printf '%s\n' "$value"
+	done | openssl dgst -sha256 2>/dev/null | sed 's/^.*= //'
+}
+
+static_mapping_signature() {
+	local wanted="$1" selector64 signature
+	while IFS="$TAB" read -r selector64 signature; do
+		[ "$selector64" = "$wanted" ] || continue
+		printf '%s' "$signature"
+		return 0
+	done <"$MCP_STATIC_MAPPINGS"
+	return 1
+}
+
+add_dynamic_mcp_tools() {
+	local filename="$1" selector64 title64 description64 schema64 intent64
+	local version task continuable recovery_protocol demo chat interactive mobile_scopes64 input_modalities64 selector title description schema intent mobile_scopes mobile_scope input_modalities modality
+	local dynamic_signature static_signature
+	[ -r "$filename" ] || return 0
+	while IFS="$TAB" read -r selector64 title64 description64 schema64 intent64 version task continuable recovery_protocol demo chat interactive input_modalities64 mobile_scopes64; do
+		selector="$(b64_decode "$selector64")" || continue
+		title="$(b64_decode "$title64")" || continue
+		description="$(b64_decode "$description64")" || continue
+		schema="$(b64_decode "$schema64")" || continue
+		intent="$(b64_decode "$intent64")" || continue
+		input_modalities="$(b64_decode "$input_modalities64")" || continue
+		mobile_scopes="$(b64_decode "$mobile_scopes64")" || continue
+		[ -n "$selector" ] && [ -n "$intent" ] || continue
+		dynamic_signature="$(mapping_signature \
+			"$selector64" "$title64" "$description64" "$schema64" \
+			"$intent64" "$version" "$task" "$continuable" "$recovery_protocol" "$demo" "$chat" \
+			"$interactive" "$input_modalities64" "$mobile_scopes64")" || continue
+		static_signature="$(static_mapping_signature "$selector64" || true)"
+		if [ -n "$static_signature" ]; then
+			[ "$static_signature" = "$dynamic_signature" ] ||
+				MCP_MAPPING_CONFLICT=1
+			continue
+		fi
+		json_add_object ''
+		json_add_string name "$selector"
+		[ -z "$title" ] || json_add_string title "$title"
+		[ -z "$description" ] || json_add_string description "$description"
+		json_add_string input_schema_json "$schema"
+		json_add_string intent "$intent"
+		json_add_int intent_version "$version"
+		json_add_boolean task "$task"
+		json_add_boolean continuable "$continuable"
+		json_add_int recovery_protocol "$recovery_protocol"
+		json_add_boolean demo "$demo"
+		json_add_boolean chat "$chat"
+		json_add_boolean interactive "$interactive"
+		json_add_array input_modalities
+		for modality in $(printf '%s' "$input_modalities" | tr ',' ' '); do
+			json_add_string '' "$modality"
+		done
+		json_close_array
+		if [ -n "$mobile_scopes" ]; then
+			json_add_array mobile_scopes
+			for mobile_scope in $(printf '%s' "$mobile_scopes" | tr ',' ' '); do
+				json_add_string '' "$mobile_scope"
+			done
+			json_close_array
+		fi
+		json_close_object
+		MCP_TOOL_COUNT=$((MCP_TOOL_COUNT + 1))
+	done <"$filename"
+}
+
+add_mcp_tools() {
+	MCP_TOOL_ORIGIN="$1"
+	local agent_dir="$2"
+	MCP_TOOL_COUNT=0
+	MCP_MAPPING_CONFLICT=0
+	MCP_STATIC_MAPPINGS="$agent_dir/static-mappings.tsv"
+	: >"$MCP_STATIC_MAPPINGS"
+	config_load agent_adapter
+	config_foreach add_mcp_tool_mapping mapping
+	add_dynamic_mcp_tools "$agent_dir/dynamic-tools.tsv"
+	[ "$MCP_MAPPING_CONFLICT" -eq 0 ] || return 2
+	[ "$MCP_TOOL_COUNT" -gt 0 ]
+}
+
+address_for_route() {
+	local filename="$1" wanted="$2" route address
+	while IFS="$TAB" read -r route address; do
+		[ "$route" = "$wanted" ] || continue
+		printf '%s' "$address"
+		return 0
+	done <"$filename"
+	return 1
+}
+
+select_public_route() {
+	local capability_file="$1" address_file="$2" intent route_id address
+	while IFS="$TAB" read -r intent route_id; do
+		address="$(address_for_route "$address_file" "$route_id" || true)"
+		[ -n "$address" ] || continue
+		printf '%s\t%s' "$route_id" "$address"
+		return 0
+	done <"$capability_file"
+	return 1
+}
+
+old_id_for_origin() {
+	local wanted="$1" id origin
+	[ -r "$REGISTRATION_STATE" ] || return 1
+	while IFS="$TAB" read -r id origin; do
+		[ "$origin" = "$wanted" ] || continue
+		printf '%s' "$id"
+		return 0
+	done <"$REGISTRATION_STATE"
+	return 1
+}
+
+register_agent() {
+	local agent_dir="$1" address="$2" generation="$3" selected_route="$4" payload="$5" response="$6" public_path="$7"
+	local transport="$8" active_relay_id="$9" active_assignment_id="${10}"
+	local origin route_id capability registration_id tool_status=0
+	origin="$(cat "$agent_dir/origin")"
+	route_id="$selected_route"
+	json_init
+	json_add_string origin "$origin"
+	json_add_string route_id "$route_id"
+	json_add_array protocols
+	json_add_string '' mcp
+	json_close_array
+	json_add_array capabilities
+	while IFS="$TAB" read -r capability ignored_route; do
+		[ -n "$capability" ] && json_add_string '' "$capability"
+	done <"$agent_dir/capabilities"
+	json_close_array
+	json_add_array mcp_tools
+	add_mcp_tools "$origin" "$agent_dir" || tool_status=$?
+	json_close_array
+	if [ -e "$agent_dir/computer-present" ]; then
+		json_add_object computer
+		json_add_string requirement "$(cat "$agent_dir/computer-requirement")"
+		json_add_array workspace_capabilities
+		while IFS= read -r capability; do
+			[ -n "$capability" ] && json_add_string '' "$capability"
+		done <"$agent_dir/computer-scopes"
+		json_close_array
+		json_close_object
+	fi
+	if [ -e "$agent_dir/mobile-present" ]; then
+		json_add_object mobile
+		json_add_string requirement "$(cat "$agent_dir/mobile-requirement")"
+		json_add_array mobile_capabilities
+		while IFS= read -r capability; do
+			[ -n "$capability" ] && json_add_string '' "$capability"
+		done <"$agent_dir/mobile-scopes"
+		json_close_array
+		json_close_object
+	fi
+	if [ "$tool_status" -ne 0 ]; then
+		if [ "$tool_status" -eq 2 ]; then
+			LAST_ERROR_CODE=MAPPING_CONFLICT
+		else
+			LAST_ERROR_CODE=AGENT_CLOUD_MANIFEST_MISSING
+		fi
+		return "$tool_status"
+	fi
+	json_add_object provisioning
+	json_add_string mode managed
+	if [ -s "$agent_dir/cloud-name" ]; then
+		json_add_string agent_name "$(cat "$agent_dir/cloud-name")"
+	else
+		json_add_string agent_name "${origin##*/}"
+	fi
+	[ ! -s "$agent_dir/manifest-digest" ] ||
+		json_add_string manifest_digest "$(cat "$agent_dir/manifest-digest")"
+	json_close_object
+	json_add_string transport "$transport"
+	if [ "$transport" = relay ]; then
+		json_add_string relay_id "$active_relay_id"
+		# The cloud target is this OpenWrt router, not the Relay's router ID.
+		json_add_string relay_router_id "$router_id"
+		json_add_string relay_assignment_id "$active_assignment_id"
+	else
+		json_add_string ipv6_address "$address"
+		json_add_int port "$public_ingress_port"
+		json_add_string path "$public_path"
+		json_add_string scheme https
+		json_add_string tls_server_name "$public_tls_server_name"
+		json_add_string ca_bundle_id "$public_ca_bundle_id"
+	fi
+	json_add_int generation "$generation"
+	json_add_int lease_seconds "$lease_seconds"
+	json_dump >"$payload" || return 1
+	curl_request POST "$base_url/api/v1/edge/v1/agent-registrations/" "$payload" "$response" 1 || return 1
+	registration_id="$(json_data_value "$response" id)" || {
+		LAST_ERROR_CODE=INVALID_REGISTRATION_RESPONSE
+		return 1
+	}
+	safe_line "$registration_id" || return 1
+	printf '%s' "$registration_id"
+}
+
+withdraw_registration() {
+	local registration_id="$1" response=$RUNTIME_DIR/withdraw.$$.response
+	case "$registration_id" in ????????-????-????-????-????????????) ;; *) return 1 ;; esac
+	curl_request DELETE "$base_url/api/v1/edge/v1/agent-registrations/$registration_id/" '' "$response" 1 >/dev/null 2>&1
+	rm -f "$response"
+}
+
+presence_connectivity_mode() {
+	case "${STATUS_ACTIVE_TRANSPORT:-}" in
+		relay) printf '%s' relay ;;
+		direct_ipv6|mixed) printf '%s' direct_ipv6 ;;
+		*)
+			[ "$cloud_transport" = relay ] && printf '%s' relay || printf '%s' direct_ipv6
+			;;
+	esac
+}
+
+renew_presence() {
+	local state="$1" payload=$RUNTIME_DIR/presence.$$.json response=$RUNTIME_DIR/presence.$$.response
+	local mode tenant_id
+	[ -r "$token_file" ] || return 1
+	mode="$(presence_connectivity_mode)" || return 1
+	json_init
+	json_add_string state "$state"
+	json_add_string connectivity_mode "$mode"
+	json_add_object capabilities
+	if [ "$mode" = direct_ipv6 ]; then
+		json_add_boolean runtime_context_v1 1
+		json_add_boolean invoke_interactions_v1 1
+		json_add_boolean mcp_stream_v1 1
+		json_add_boolean mcp_tasks_v1 1
+		json_add_boolean caller_mobile_v1 1
+		json_add_boolean durable_recovery_v1 1
+	else
+		json_add_boolean runtime_context_v1 0
+		json_add_boolean invoke_interactions_v1 0
+		json_add_boolean mcp_stream_v1 0
+		json_add_boolean mcp_tasks_v1 0
+		json_add_boolean caller_mobile_v1 0
+		json_add_boolean durable_recovery_v1 0
+	fi
+	json_close_object
+	json_dump >"$payload" || return 1
+	if ! curl_request POST "$base_url/api/v1/edge/v1/presence/" "$payload" "$response" 1; then
+		rm -f "$payload" "$response"
+		return 1
+	fi
+	tenant_id="$(json_data_value "$response" tenant_id)" || {
+		rm -f "$payload" "$response"
+		return 1
+	}
+	install_cloud_tenant_id "$tenant_id" || {
+		rm -f "$payload" "$response"
+		return 1
+	}
+	rm -f "$payload" "$response"
+	return 0
+}
+
+withdraw_presence() {
+	local response=$RUNTIME_DIR/presence-stop.$$.response
+	[ -r "$token_file" ] || return 0
+	curl_request DELETE "$base_url/api/v1/edge/v1/presence/" '' "$response" 1 >/dev/null 2>&1
+	rm -f "$response"
+}
+
+sync_once() {
+	local snapshot_dir=$RUNTIME_DIR/snapshot.$$ new_state=$RUNTIME_DIR/registrations.$$.tsv
+	local new_cloud_state=$RUNTIME_DIR/agent-registrations.$$.tsv
+	local generation agent_dir origin route_id address healthy registration_id old_id selected
+	local registered=0 eligible=0 skipped=0 payload response id old_origin
+	local agent_mcp_path skip_reason='' selected_transport direct_ready=0 relay_ready=0
+	local relay_active active_relay_id active_assignment_id relay_remaining relay_tunnels_up
+	local formal_agent_id runtime_id cloud_mcp_url provisioning_state manifest_digest status_message
+	local registration_output registration_result
+	SYNC_PRESENCE_STATE=degraded
+	STATUS_REGISTRATION_HTTP_CODE=0
+	STATUS_REGISTRATION_ERROR_CODE=''
+	SNAPSHOT_ERROR_STAGE=''
+	STATUS_RELAY_READY=0
+	set_recovery_status automatic_retry "$recovery_interval"
+	mkdir -p "$snapshot_dir" || return 1
+	if ! extract_snapshot "$snapshot_dir"; then
+		rm -rf "$snapshot_dir"
+		write_status snapshot_failed "Could not read the local Agent snapshot at ${SNAPSHOT_ERROR_STAGE:-unknown}." 0 0 0
+		return 1
+	fi
+	if direct_ingress_ready; then
+		direct_ready=1
+	fi
+	IFS="$TAB" read -r relay_active active_relay_id active_assignment_id relay_remaining relay_tunnels_up <"$snapshot_dir/relay.tsv"
+	STATUS_RELAY_ID="$active_relay_id"
+	STATUS_RELAY_ASSIGNMENT_ID="$active_assignment_id"
+	STATUS_RELAY_TUNNELS_UP="$relay_tunnels_up"
+	STATUS_ACTIVE_TRANSPORT=''
+	case "$relay_active" in 1|true) ;; *) relay_active=0 ;; esac
+	case "$relay_tunnels_up" in ''|*[!0-9]*) relay_tunnels_up=0 ;; esac
+	if [ "$relay_active" != 0 ] && [ -n "$active_relay_id" ] &&
+		[ -n "$active_assignment_id" ] && [ "$relay_tunnels_up" -gt 0 ]; then
+		relay_ready=1
+	fi
+	STATUS_RELAY_READY="$relay_ready"
+	if [ "$cloud_transport" = direct_ipv6 ] && [ "$direct_ready" -ne 1 ]; then
+		rm -rf "$snapshot_dir"
+		write_status direct_ingress_unavailable "Direct IPv6 requires a valid managed server certificate and a live mTLS listener on the public ingress port." 0 0 0
+		return 1
+	fi
+	if [ "$cloud_transport" = relay ] && [ "$relay_ready" -ne 1 ]; then
+		rm -rf "$snapshot_dir"
+		write_status relay_unavailable "Relay mode requires a live Directory lease and established outbound tunnel." 0 0 0
+		return 1
+	fi
+	if [ "$cloud_transport" = auto ] && [ "$direct_ready" -ne 1 ] && [ "$relay_ready" -ne 1 ]; then
+		rm -rf "$snapshot_dir"
+		write_status no_cloud_transport "Neither Direct IPv6 nor an active Relay tunnel is available." 0 0 0
+		return 1
+	fi
+	generation="$(next_generation)" || return 1
+	: >"$new_state"
+	: >"$new_cloud_state"
+	for agent_dir in "$snapshot_dir"/agent-*; do
+		[ -d "$agent_dir" ] || continue
+		origin="$(cat "$agent_dir/origin")"
+		healthy="$(cat "$agent_dir/healthy")"
+		selected="$(select_public_route "$agent_dir/capabilities" "$snapshot_dir/addresses.tsv" || true)"
+		route_id="${selected%%"$TAB"*}"
+		address="${selected#*"$TAB"}"
+		[ "$selected" != "$address" ] || address=''
+		[ -n "$route_id" ] || route_id="$(cat "$agent_dir/route-id")"
+		selected_transport=''
+		if [ "$cloud_transport" != relay ] && [ "$direct_ready" -eq 1 ] && [ -n "$address" ]; then
+			selected_transport=direct_ipv6
+		elif [ "$cloud_transport" != direct_ipv6 ] && [ "$relay_ready" -eq 1 ]; then
+			selected_transport=relay
+		fi
+		if [ "$healthy" != 1 ] || [ -z "$route_id" ] || [ -z "$selected_transport" ] || [ ! -s "$agent_dir/capabilities" ]; then
+			skipped=$((skipped + 1))
+			old_id="$(old_id_for_origin "$origin" || true)"
+			[ -z "$old_id" ] || printf '%s\t%s\n' "$old_id" "$origin" >>"$new_state"
+			continue
+		fi
+		agent_mcp_path=''
+		mcp_path_status=0
+		if [ "$selected_transport" = direct_ipv6 ]; then
+			agent_mcp_path="$(mcp_path_for_origin "$origin")" || mcp_path_status=$?
+		fi
+		if [ "$mcp_path_status" -ne 0 ]; then
+			skipped=$((skipped + 1))
+			if [ "$mcp_path_status" -eq 2 ]; then
+				skip_reason='origin_mcp_path_exceeds_255_bytes'
+				log "Skipping Agent origin because its encoded MCP path exceeds 255 bytes."
+			else
+				skip_reason='origin_mcp_path_encoding_failed'
+				log "Skipping Agent origin because it cannot be encoded as a canonical MCP path."
+			fi
+			old_id="$(old_id_for_origin "$origin" || true)"
+			[ -z "$old_id" ] || printf '%s\t%s\n' "$old_id" "$origin" >>"$new_state"
+			continue
+		fi
+		eligible=$((eligible + 1))
+		payload=$snapshot_dir/register.$eligible.json
+		response=$snapshot_dir/register.$eligible.response
+		registration_output=$snapshot_dir/register.$eligible.id
+		LAST_HTTP_CODE=0
+		LAST_ERROR_CODE=''
+		registration_result=0
+		if register_agent "$agent_dir" "$address" "$generation" "$route_id" \
+			"$payload" "$response" "$agent_mcp_path" "$selected_transport" \
+			"$active_relay_id" "$active_assignment_id" >"$registration_output"; then
+			registration_id="$(cat "$registration_output")"
+		else
+			registration_result=$?
+			registration_id=''
+		fi
+		rm -f "$registration_output"
+		if [ -n "$registration_id" ]; then
+			formal_agent_id="$(json_data_value "$response" agent_id || true)"
+			runtime_id="$(json_data_value "$response" runtime_id || true)"
+			cloud_mcp_url="$(json_data_value "$response" mcp_url || true)"
+			provisioning_state="$(json_data_value "$response" provisioning_state || true)"
+			manifest_digest="$(cat "$agent_dir/manifest-digest" 2>/dev/null || true)"
+			if [ -z "$provisioning_state" ]; then
+				if [ -n "$formal_agent_id" ] && [ -n "$runtime_id" ] &&
+					[ -n "$cloud_mcp_url" ]; then
+					provisioning_state=ready
+				else
+					provisioning_state=pending
+				fi
+			fi
+			status_message=''
+			printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+				"$origin" "$provisioning_state" "$registration_id" \
+				"$formal_agent_id" "$runtime_id" "$selected_transport" \
+				"$cloud_mcp_url" "$manifest_digest" \
+				"$(b64_encode "$status_message")" >>"$new_cloud_state"
+			if [ -z "$STATUS_ACTIVE_TRANSPORT" ]; then
+				STATUS_ACTIVE_TRANSPORT="$selected_transport"
+			elif [ "$STATUS_ACTIVE_TRANSPORT" != "$selected_transport" ]; then
+				STATUS_ACTIVE_TRANSPORT=mixed
+			fi
+			printf '%s\t%s\n' "$registration_id" "$origin" >>"$new_state"
+			registered=$((registered + 1))
+		else
+			STATUS_REGISTRATION_HTTP_CODE="$LAST_HTTP_CODE"
+			STATUS_REGISTRATION_ERROR_CODE="$LAST_ERROR_CODE"
+			manifest_digest="$(cat "$agent_dir/manifest-digest" 2>/dev/null || true)"
+			provisioning_state=degraded
+			status_message="${LAST_ERROR_CODE:-Cloud registration is temporarily unavailable.}"
+			if [ "$registration_result" -eq 2 ] ||
+				case "$LAST_HTTP_CODE" in 4??) true ;; *) false ;; esac; then
+				provisioning_state=rejected
+			fi
+			if [ "$registration_result" -eq 2 ]; then
+				skip_reason=mapping_conflict
+				[ "$STATUS_RECOVERY_ACTION" = reauthorize ] ||
+					set_recovery_status fix_agent_configuration "$sync_interval"
+			else
+				classify_cloud_recovery
+			fi
+			printf '%s|%s||||%s||%s|%s\n' \
+				"$origin" "$provisioning_state" "$selected_transport" \
+				"$manifest_digest" "$(b64_encode "$status_message")" \
+				>>"$new_cloud_state"
+			old_id="$(old_id_for_origin "$origin" || true)"
+			[ -z "$old_id" ] || printf '%s\t%s\n' "$old_id" "$origin" >>"$new_state"
+			skipped=$((skipped + 1))
+		fi
+	done
+
+	if [ -r "$REGISTRATION_STATE" ]; then
+		while IFS="$TAB" read -r id old_origin; do
+			[ -n "$id" ] && [ -n "$old_origin" ] || continue
+			grep -Fqx -e "$old_origin" "$snapshot_dir/local-origins" && continue
+			withdraw_registration "$id" || true
+		done <"$REGISTRATION_STATE"
+	fi
+	mv -f "$new_state" "$REGISTRATION_STATE"
+	write_agent_registration_status "$new_cloud_state" "$generation" || true
+	rm -f "$new_cloud_state"
+	rm -rf "$snapshot_dir"
+	if [ "$registered" -eq "$eligible" ] && [ "$skipped" -eq 0 ] && [ -z "$skip_reason" ]; then
+		SYNC_PRESENCE_STATE=online
+		clear_recovery_status
+		write_status online "Cloud Agent leases are current through Direct IPv6 or Relay." "$registered" "$eligible" "$skipped"
+	else
+		SYNC_PRESENCE_STATE=degraded
+		write_status degraded "One or more eligible Agents could not be renewed or published." "$registered" "$eligible" "$skipped" "$skip_reason"
+	fi
+	return 0
+}
+
+withdraw_all() {
+	local id origin
+	[ -r "$token_file" ] && [ -r "$REGISTRATION_STATE" ] || return 0
+	while IFS="$TAB" read -r id origin; do
+		[ -n "$id" ] && withdraw_registration "$id" || true
+	done <"$REGISTRATION_STATE"
+	: >"$REGISTRATION_STATE"
+	: >"$RUNTIME_DIR/agent-registrations.empty.tsv"
+	write_agent_registration_status \
+		"$RUNTIME_DIR/agent-registrations.empty.tsv" 0 || true
+	rm -f "$RUNTIME_DIR/agent-registrations.empty.tsv"
+}
+
+stop_connector() {
+	STOPPING=1
+	write_status stopping "Withdrawing cloud Agent leases." 0 0 0
+	withdraw_all
+	withdraw_presence || true
+	rm -f "$AGENT_CLOUD_ENABLED" "$AGENT_CLOUD_ENROLLED" "$AGENT_CLOUD_TENANT_ID"
+	exit 0
+}
+
+write_recoverable_cloud_failure() {
+	local state="$1" message="$2"
+	classify_cloud_recovery
+	if [ "$STATUS_RECOVERY_ACTION" = reauthorize ]; then
+		state=reauthorization_required
+		message="Nexus Cloud rejected this Router identity. Generate a new one-time pairing code in Nexus Console and save it on the Router."
+	fi
+	write_status "$state" "$message" 0 0 0
+}
+
+prepare_cloud_runtime() {
+	set_recovery_status automatic_retry "$recovery_interval"
+	if [ "$REENROLLING" -eq 1 ] || [ ! -s "$token_file" ]; then
+		if [ -z "$pairing_code" ]; then
+			set_recovery_status supply_pairing_code "$sync_interval"
+			write_status pairing_required "Paste a new one-time pairing code from Nexus Console." 0 0 0
+			return 1
+		fi
+		if ! enroll_node; then
+			if cloud_authorization_required || case "$LAST_HTTP_CODE" in 4??) true ;; *) false ;; esac; then
+				set_recovery_status replace_pairing_code "$sync_interval"
+				write_status pairing_rejected "The one-time pairing code was rejected or expired. Generate a new code in Nexus Console." 0 0 0
+			else
+				write_recoverable_cloud_failure enrollment_failed "Nexus Cloud enrollment is temporarily unavailable and will be retried automatically."
+			fi
+			return 1
+		fi
+		# Enrollment consumes the one-time code. Do not replay it on the next
+		# recovery cycle after the new identity has been installed.
+		REENROLLING=0
+		pairing_code=''
+	fi
+	if ! synchronize_gateway_cloud_trust; then
+		set_recovery_status automatic_retry "$recovery_interval"
+		write_status auth_configuration_failed "Cloud TLS trust could not be synchronized to the LAN Agent Gateway. Nexus will retry automatically." 0 0 0
+		return 1
+	fi
+	if ! renew_managed_identity; then
+		write_recoverable_cloud_failure certificate_renewal_failed "The managed device certificate could not be renewed. Nexus will retry automatically."
+		return 1
+	fi
+	if ! renew_managed_ingress_identity; then
+		if [ "$cloud_transport" = direct_ipv6 ]; then
+			write_recoverable_cloud_failure ingress_certificate_failed "The managed Direct IPv6 server certificate could not be renewed or activated. Nexus will retry automatically."
+			return 1
+		fi
+		log "Direct IPv6 ingress identity refresh failed; auto mode may continue with Relay."
+	fi
+	printf '%s\n' enrolled >"$AGENT_CLOUD_ENROLLED.tmp.$$" &&
+		chmod 0644 "$AGENT_CLOUD_ENROLLED.tmp.$$" &&
+		mv -f "$AGENT_CLOUD_ENROLLED.tmp.$$" "$AGENT_CLOUD_ENROLLED" || {
+		set_recovery_status automatic_retry "$recovery_interval"
+		write_status local_state_failed "The local Cloud enrollment state could not be projected. Nexus will retry automatically." 0 0 0
+		return 1
+	}
+	if [ "$cloud_transport" = direct_ipv6 ]; then
+		disable_relay_configuration || {
+			set_recovery_status automatic_retry "$recovery_interval"
+			write_status relay_configuration_failed "The stale Relay configuration could not be disabled. Nexus will retry automatically." 0 0 0
+			return 1
+		}
+		probe_cloud_relay_availability
+	elif ! refresh_relay_configuration; then
+		if [ "$cloud_transport" = relay ]; then
+			if [ "$LAST_ERROR_CODE" = RELAY_NOT_CONFIGURED ]; then
+				STATUS_CLOUD_RELAY_AVAILABLE=0
+				set_recovery_status enable_relay_or_switch_transport "$sync_interval"
+				write_status relay_not_configured "Nexus Cloud Relay is not configured. Select Direct IPv6 or ask the Cloud administrator to enable Relay." 0 0 0
+			else
+				write_recoverable_cloud_failure relay_configuration_failed "The Relay Directory or trust configuration could not be refreshed. Nexus will retry automatically."
+			fi
+			return 1
+		fi
+		log "Relay configuration refresh failed; auto mode may continue with Direct IPv6."
+	fi
+	clear_recovery_status
+	return 0
+}
+
+main() {
+	umask 077
+	mkdir -p "$RUNTIME_DIR" /etc/nexus-cloud
+	chmod 0700 "$RUNTIME_DIR" /etc/nexus-cloud
+	trap stop_connector TERM INT
+	if ! load_configuration; then
+		write_status configuration_error "Nexus Cloud configuration is invalid." 0 0 0
+		exit 1
+	fi
+	[ "$enabled" -eq 1 ] || exit 0
+	case "$cloud_transport" in
+		direct_ipv6) STATUS_LOCAL_RELAY_ENABLED=0 ;;
+		auto|relay) STATUS_LOCAL_RELAY_ENABLED=1 ;;
+	esac
+	mkdir -p "$AGENT_CLOUD_STATUS_DIR" || exit 1
+	chmod 0755 "$AGENT_CLOUD_STATUS_DIR" || exit 1
+	printf '%s\n' "$cloud_transport" >"$AGENT_CLOUD_ENABLED.tmp.$$" &&
+		chmod 0644 "$AGENT_CLOUD_ENABLED.tmp.$$" &&
+		mv -f "$AGENT_CLOUD_ENABLED.tmp.$$" "$AGENT_CLOUD_ENABLED" || exit 1
+	if [ -s "$CLOUD_TENANT_ID_FILE" ]; then
+		project_cloud_tenant_id "$(cat "$CLOUD_TENANT_ID_FILE")" || exit 1
+	fi
+	if [ -n "$pairing_code" ] && [ -s "$token_file" ]; then
+		REENROLLING=1
+		write_status reenrolling "Replacing the existing Cloud registration with the supplied one-time pairing code." 0 0 0
+		log "explicit pairing code requested Cloud identity replacement"
+	fi
+	write_status connecting "Synchronizing local public IPv6 Agents." 0 0 0
+	while [ "$STOPPING" -eq 0 ]; do
+		if prepare_cloud_runtime; then
+			if sync_once; then
+				if ! renew_presence "${SYNC_PRESENCE_STATE:-online}"; then
+					write_recoverable_cloud_failure presence_failed "Cloud Router presence renewal failed. Nexus will retry automatically."
+				fi
+			else
+				if ! renew_presence degraded; then
+					write_recoverable_cloud_failure presence_failed "Cloud Router presence renewal failed. Nexus will retry automatically."
+				fi
+			fi
+		else
+			# Preserve a degraded Router lease while a recoverable local Relay,
+			# certificate, or Gateway prerequisite is being repaired. A revoked
+			# credential cannot renew Presence and remains explicitly blocked.
+			renew_presence degraded >/dev/null 2>&1 || true
+		fi
+		retry_delay="$(current_retry_delay)"
+		STATUS_NEXT_RETRY_SECONDS="$retry_delay"
+		sleep "$retry_delay" &
+		wait $!
+	done
+}
+
+main "$@"

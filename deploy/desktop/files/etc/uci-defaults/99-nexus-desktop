@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+# Fresh ImageBuilder overlay only. Never apply to an existing router.
+uci set system.@system[0].hostname='nexus-desktop'
+uci set network.lan.proto='static'
+uci set network.lan.ipaddr='192.168.246.1'
+uci set network.lan.netmask='255.255.255.0'
+uci -q delete network.lan.ip6assign || true
+uci set network.lan.ip6addr='fd6e:6578:7573:246::1/64'
+uci -q delete network.lan.gateway || true
+uci -q delete network.lan.dns || true
+uci set dhcp.lan.ignore='1'
+uci set dhcp.lan.ra='disabled'
+uci set dhcp.lan.dhcpv6='disabled'
+uci set dhcp.lan.ndp='disabled'
+uci -q delete network.wan || true
+uci -q delete network.wan6 || true
+uci commit system
+uci commit network
+uci commit dhcp
+exit 0

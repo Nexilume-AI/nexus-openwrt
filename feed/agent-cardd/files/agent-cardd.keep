@@ -1,0 +1,3 @@
+/etc/config/agent_card
+/etc/agentd/card-trust.pub
+/etc/agentd/directory-root.pub

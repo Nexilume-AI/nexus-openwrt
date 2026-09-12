@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "intent": "chip.verilog.verify.lint",
+  "intent_version": 1,
+  "task_id": "test-task-001",
+  "tenant": "tenant-a",
+  "hop_limit": 8,
+  "constraints": {
+    "max_cost_microunits": 200000,
+    "max_latency_ms": 3000,
+    "min_trust_level": 80,
+    "region": [
+      "local"
+    ]
+  }
+}
+

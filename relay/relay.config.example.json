@@ -1,0 +1,67 @@
+{
+  "listen": "0.0.0.0",
+  "port": 7444,
+  "tls": {
+    "key": "./tls/relay.key",
+    "cert": "./tls/relay.pem",
+    "ca": "./tls/ca.pem"
+  },
+  "relayId": "relay-east-1",
+  "relayRouterId": "router-relay-east-1",
+  "relayDomainId": "relay.nexus.example",
+  "heartbeatMs": 5000,
+  "maxNodes": 256,
+  "maxPairs": 1024,
+  "maxQueuedBytes": 262144,
+  "ticketMaxLifetimeSeconds": 300,
+  "ticketClockSkewSeconds": 5,
+  "maxUsedTickets": 4096,
+  "maxCapabilityRoutes": 4096,
+  "openMesh": {
+    "enabled": false
+  },
+  "ticketKeys": {
+    "p43-current": "GENERATE_SHARED_TICKET_KEY"
+  },
+  "cloudIngress": {
+    "enabled": false,
+    "listen": "0.0.0.0",
+    "port": 7445,
+    "relayId": "relay-east-1",
+    "sourceRouterId": "nexus-cloud",
+    "clientDns": "server.nexus.example",
+    "maxInflight": 64,
+    "maxBodyBytes": 65536,
+    "timeoutMs": 30000,
+    "tls": {
+      "key": "./tls/relay-cloud.key",
+      "cert": "./tls/relay-cloud.pem",
+      "ca": "./tls/server-client-ca.pem"
+    },
+    "jwt": {
+      "issuer": "https://nexus.example/relay",
+      "keyId": "relay-rs256-1",
+      "publicKey": "./tls/server-relay-jwt-public.pem",
+      "maxReplay": 4096,
+      "clockSkewSeconds": 5
+    }
+  },
+  "federation": {
+    "enabled": false,
+    "maxPeers": 16,
+    "maxRemoteRouters": 4096,
+    "maxTransitHops": 8,
+    "heartbeatMs": 5000,
+    "peers": {
+      "relay-west-1": {
+        "relayRouterId": "router-relay-west-1",
+        "domainId": "relay.nexus.example",
+        "certificateDns": "relay-west-1.nexus.example",
+        "endpoint": "https://relay-west-1.nexus.example:7444/federation/v1",
+        "connectIpv4": "192.0.2.41",
+        "priority": 100
+      }
+    }
+  },
+  "capture": "./relay-events.jsonl"
+}

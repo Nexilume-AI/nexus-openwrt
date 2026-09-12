@@ -1,0 +1,26 @@
+name: Source checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libssl-dev openssl
+          node -e "if (Number(process.versions.node.split('.')[0]) < 20) process.exit(1)"
+      - name: Host contracts (Debug preserves C assertions)
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNEXUS_INTEGRATION_TESTS=OFF
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Relay and Directory runtime
+        run: npm --prefix relay test
+      - name: Desktop bundle
+        run: python3 -m unittest discover -s deploy/desktop -p test_bundle.py

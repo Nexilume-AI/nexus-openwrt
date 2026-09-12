@@ -1,0 +1,37 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=96
+STOP=10
+
+start_service() {
+	local enabled config_file mode
+	config_load nexus_roles
+	config_get_bool enabled relay enabled 0
+	config_get mode main mode
+	case "$mode" in
+		node-relay|all) enabled=1 ;;
+		node|node-directory) enabled=0 ;;
+	esac
+	config_get config_file relay config_file /etc/nexus-relayd/relay.json
+	[ "$enabled" = 1 ] || return 0
+	[ -r "$config_file" ] || {
+		echo "nexus-relayd: unreadable config: $config_file" >&2
+		return 1
+	}
+
+	procd_open_instance
+	procd_set_param command /usr/bin/node /usr/lib/nexus-relayd/nexus-relayd.js --config "$config_file"
+	procd_set_param user nexus-relay
+	procd_set_param group nexus-relay
+	procd_set_param respawn 2000 5 5
+	procd_set_param limits nofile="4096 4096"
+	procd_set_param file "$config_file"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger nexus_roles
+}

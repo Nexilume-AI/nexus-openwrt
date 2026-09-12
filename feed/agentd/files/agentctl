@@ -1,0 +1,124 @@
+#!/bin/sh
+
+set -eu
+
+usage() {
+	cat >&2 <<'EOF'
+Usage:
+  agentctl stats
+  agentctl recovery
+  agentctl routes [limit]
+  agentctl agents [limit]
+  agentctl addresses
+  agentctl neighbors [limit]
+  agentctl discoveries [limit]
+  agentctl discovery-refresh
+  agentctl cross-discoveries [limit]
+  agentctl cross-discovery-refresh
+  agentctl promotions [limit]
+  agentctl cards [limit]
+  agentctl card-trust
+  agentctl card-trust-ingest-verified '<json>'
+  agentctl card-ingest-verified '<json>'
+  agentctl card-revoke '<json>'
+  agentctl discovery-promote '<json>'
+  agentctl discovery-revoke '<json>'
+  agentctl relay
+  agentctl relay-refresh
+  agentctl open-mesh-relay
+  agentctl open-mesh-relay-refresh
+  agentctl reload
+  agentctl policy
+  agentctl reload-policy
+  agentctl reload-peers
+  agentctl register '<json>'
+  agentctl renew '<json>'
+  agentctl unregister '<json>'
+  agentctl lookup '<json>'
+  agentctl route '<json>'
+  agentctl call <method> [json]
+
+The write methods are administrative until agent identity binding is
+implemented by agent-gw.
+EOF
+	exit 2
+}
+
+[ "$#" -ge 1 ] || usage
+command_name="$1"
+shift
+
+case "$command_name" in
+	stats|recovery|reload|relay|card-trust|policy|addresses)
+		[ "$#" -eq 0 ] || usage
+		method="$command_name"
+		[ "$method" != "card-trust" ] || method=card_trust
+		exec ubus call agent "$method" '{}'
+		;;
+	reload-policy)
+		[ "$#" -eq 0 ] || usage
+		exec ubus call agent reload_policy '{}'
+		;;
+	reload-peers)
+		[ "$#" -eq 0 ] || usage
+		exec ubus call agent reload_peers '{}'
+		;;
+	discovery-refresh)
+		[ "$#" -eq 0 ] || usage
+		exec ubus call agent discovery_refresh '{}'
+		;;
+	cross-discovery-refresh)
+		[ "$#" -eq 0 ] || usage
+		exec ubus call agent cross_discovery_refresh '{}'
+		;;
+	relay-refresh)
+		[ "$#" -eq 0 ] || usage
+		exec ubus call agent relay_refresh '{}'
+		;;
+	open-mesh-relay)
+		[ "$#" -eq 0 ] || usage
+		exec ubus call agent open_mesh_relay '{}'
+		;;
+	open-mesh-relay-refresh)
+		[ "$#" -eq 0 ] || usage
+		exec ubus call agent open_mesh_relay_refresh '{}'
+		;;
+	routes|agents|neighbors|discoveries|cross-discoveries|promotions|cards)
+		[ "$#" -le 1 ] || usage
+		limit="${1:-100}"
+		case "$limit" in
+			''|*[!0-9]*) usage ;;
+		esac
+		method="$command_name"
+		[ "$method" != "cross-discoveries" ] || method=cross_discoveries
+		exec ubus call agent "$method" "{\"limit\":$limit}"
+		;;
+	card-trust-ingest-verified|card-ingest-verified|card-revoke)
+		[ "$#" -eq 1 ] || usage
+		method=card_ingest_verified
+		[ "$command_name" != "card-trust-ingest-verified" ] || \
+			method=card_trust_ingest_verified
+		[ "$command_name" != "card-revoke" ] || method=card_revoke
+		exec ubus call agent "$method" "$1"
+		;;
+	discovery-promote|discovery-revoke)
+		[ "$#" -eq 1 ] || usage
+		method=discovery_promote
+		[ "$command_name" != "discovery-revoke" ] || \
+			method=discovery_revoke
+		exec ubus call agent "$method" "$1"
+		;;
+	register|renew|unregister|lookup|route)
+		[ "$#" -eq 1 ] || usage
+		exec ubus call agent "$command_name" "$1"
+		;;
+	call)
+		[ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+		method="$1"
+		payload="${2:-{}}"
+		exec ubus call agent "$method" "$payload"
+		;;
+	*)
+		usage
+		;;
+esac

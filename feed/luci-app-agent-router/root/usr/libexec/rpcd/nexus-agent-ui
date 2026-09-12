@@ -1,0 +1,512 @@
+#!/bin/sh
+
+. /usr/share/libubox/jshn.sh
+
+LOCK_FILE="/var/lock/nexus-agent-ui.lock"
+CLOUD_STATUS_FILE="/var/run/nexus-cloud/status.json"
+CLOUD_PROFILE_FILE="/usr/share/nexus-agent-router/cloud-profile.json"
+LIST_LIMIT=24
+
+uci_value() {
+	uci -q get "$1.$2.$3" 2>/dev/null || printf '%s' "$4"
+}
+
+uci_bool() {
+	case "$(uci_value "$1" "$2" "$3" "$4")" in
+		1|true|yes|on) printf '1' ;;
+		*) printf '0' ;;
+	esac
+}
+
+config_generation() {
+	{
+		uci -q export agent 2>/dev/null
+		uci -q export agent_gateway 2>/dev/null
+		uci -q export agent_adapter 2>/dev/null
+		uci -q export nexus_cloud 2>/dev/null | sed '/pairing_code/d'
+	} | cksum | awk '{ print $1 }'
+}
+
+json_reply_error() {
+	local code="$1"
+	local message="$2"
+	local generation
+	generation="$(config_generation)"
+	json_init
+	json_add_boolean ok 0
+	json_add_string code "$code"
+	json_add_string message "$message"
+	json_add_int generation "${generation:-0}"
+	json_dump
+}
+
+json_reply_ok() {
+	local state="$1"
+	local generation
+	generation="$(config_generation)"
+	json_init
+	json_add_boolean ok 1
+	json_add_string state "$state"
+	json_add_int generation "${generation:-0}"
+	json_dump
+}
+
+service_running() {
+	local service="$1"
+	ubus -S call service list "{\"name\":\"$service\"}" 2>/dev/null |
+		grep -q '"running"[[:space:]]*:[[:space:]]*true'
+}
+
+cloud_profile_value() {
+	local name="$1"
+	[ -r "$CLOUD_PROFILE_FILE" ] || return 0
+	jsonfilter -q -i "$CLOUD_PROFILE_FILE" -e "@.$name" 2>/dev/null
+}
+
+cloud_origin_available() {
+	local base enrollment
+	base="$(uci_value nexus_cloud main base_url '')"
+	enrollment="$(uci_value nexus_cloud main enrollment_url '')"
+	[ -n "$base" ] || base="$(cloud_profile_value base_url)"
+	[ -n "$enrollment" ] || enrollment="$(cloud_profile_value enrollment_url)"
+	case "$base" in
+		https://*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+cloud_status_value() {
+	local name="$1"
+	[ -r "$CLOUD_STATUS_FILE" ] || return 0
+	jsonfilter -q -i "$CLOUD_STATUS_FILE" -e "@.$name" 2>/dev/null
+}
+
+friendly_cloud_state() {
+	case "$1" in
+		online|enrolled) printf 'ready' ;;
+		connecting|starting|pairing_required) printf 'connecting' ;;
+		not_started|stopped|stopping|'') printf 'offline' ;;
+		*) printf 'degraded' ;;
+	esac
+}
+
+friendly_transport() {
+	case "$1" in
+		direct_ipv6) printf 'direct' ;;
+		relay) printf 'relay' ;;
+		*) printf 'auto' ;;
+	esac
+}
+
+strip_agent_name() {
+	local value="$1"
+	value="${value%/}"
+	printf '%s' "${value##*/}"
+}
+
+jsonfilter_value() {
+	local document="$1"
+	local expression="$2"
+	jsonfilter -q -s "$document" -e "$expression" 2>/dev/null
+}
+
+add_neighbors() {
+	local document="$1"
+	local index=0 router name up learned phase
+	json_add_array neighbors
+	while [ "$index" -lt "$LIST_LIMIT" ]; do
+		router="$(jsonfilter_value "$document" "@.neighbors[$index].router_id")"
+		[ -n "$router" ] || break
+		name="$(jsonfilter_value "$document" "@.neighbors[$index].peer_id")"
+		up="$(jsonfilter_value "$document" "@.neighbors[$index].session_up")"
+		learned="$(jsonfilter_value "$document" "@.neighbors[$index].learned_routes")"
+		phase="$(jsonfilter_value "$document" "@.neighbors[$index].transport_phase")"
+		json_add_object ''
+		json_add_string name "${name:-$router}"
+		json_add_string router "$router"
+		case "$up" in true|1) json_add_string state ready ;; *) json_add_string state unavailable ;; esac
+		json_add_int capabilities "${learned:-0}"
+		json_close_object
+		index=$((index + 1))
+	done
+	json_close_array
+}
+
+add_agents() {
+	local document="$1"
+	local index=0 identity name healthy count
+	json_add_array agents
+	while [ "$index" -lt "$LIST_LIMIT" ]; do
+		identity="$(jsonfilter_value "$document" "@.agents[$index].agent_id")"
+		[ -n "$identity" ] || break
+		name="$(strip_agent_name "$identity")"
+		healthy="$(jsonfilter_value "$document" "@.agents[$index].healthy")"
+		count="$(jsonfilter_value "$document" "@.agents[$index].capability_count")"
+		json_add_object ''
+		json_add_string name "${name:-Agent}"
+		case "$healthy" in true|1) json_add_string state ready ;; *) json_add_string state unavailable ;; esac
+		json_add_int capabilities "${count:-0}"
+		json_close_object
+		index=$((index + 1))
+	done
+	json_close_array
+}
+
+add_routes() {
+	local document="$1"
+	local index=0 intent origin agent peer source healthy friendly_source
+	json_add_array routes
+	while [ "$index" -lt "$LIST_LIMIT" ]; do
+		intent="$(jsonfilter_value "$document" "@.routes[$index].intent")"
+		[ -n "$intent" ] || break
+		origin="$(jsonfilter_value "$document" "@.routes[$index].origin")"
+		agent="$(strip_agent_name "$origin")"
+		peer="$(jsonfilter_value "$document" "@.routes[$index].learned_from_peer")"
+		source="$(jsonfilter_value "$document" "@.routes[$index].source")"
+		healthy="$(jsonfilter_value "$document" "@.routes[$index].healthy")"
+		case "$source" in
+			relay|cloud*) friendly_source=cloud ;;
+			*) [ -n "$peer" ] && friendly_source=neighbor || friendly_source=local ;;
+		esac
+		json_add_object ''
+		json_add_string capability "$intent"
+		json_add_string agent "${agent:-Agent}"
+		json_add_string source "$friendly_source"
+		[ -n "$peer" ] && json_add_string via "$peer"
+		case "$healthy" in true|1) json_add_string state ready ;; *) json_add_string state unavailable ;; esac
+		json_close_object
+		index=$((index + 1))
+	done
+	json_close_array
+}
+
+overview() {
+	local stats neighbors agents routes cloud_state cloud_friendly cloud_enabled
+	local router_enabled agent_enabled paired transport registered updated overall action
+	local route_count neighbor_count agent_count generation
+	stats="$(ubus -S call agent stats 2>/dev/null || true)"
+	neighbors="$(ubus -S call agent neighbors "{\"limit\":$LIST_LIMIT}" 2>/dev/null || printf '{\"neighbors\":[]}')"
+	agents="$(ubus -S call agent agents "{\"limit\":$LIST_LIMIT}" 2>/dev/null || printf '{\"agents\":[]}')"
+	routes="$(ubus -S call agent routes "{\"limit\":$LIST_LIMIT}" 2>/dev/null || printf '{\"routes\":[]}')"
+
+	cloud_enabled="$(uci_bool nexus_cloud main enabled 0)"
+	router_enabled=0
+	[ "$(uci_bool agent main enabled 1)" = 1 ] &&
+		[ "$(uci_bool agent main peer_transport_enabled 0)" = 1 ] &&
+		[ "$(uci_bool agent main peer_listener_enabled 0)" = 1 ] &&
+		[ "$(uci_bool agent main discovery_enabled 0)" = 1 ] &&
+		[ "$(uci_bool agent main discovery_publish_enabled 0)" = 1 ] && router_enabled=1
+	agent_enabled=0
+	[ "$(uci_bool agent_gateway main registration_enabled 0)" = 1 ] &&
+		[ "$(uci_bool agent_gateway main invoke_enabled 0)" = 1 ] &&
+		[ "$(uci_bool agent_gateway main lan_sdk_enabled 0)" = 1 ] &&
+		[ "$(uci_bool agent_gateway main lan_backend_enabled 1)" = 1 ] &&
+		[ "$(uci_bool agent_adapter main enabled 0)" = 1 ] && agent_enabled=1
+
+	cloud_state="$(cloud_status_value state)"
+	cloud_friendly="$(friendly_cloud_state "$cloud_state")"
+	transport="$(friendly_transport "$(cloud_status_value active_transport)")"
+	registered="$(cloud_status_value registered)"
+	updated="$(cloud_status_value updated_at)"
+	[ -s "$(uci_value nexus_cloud main node_id_file /etc/nexus-cloud/node.id)" ] && paired=1 || paired=0
+	route_count="$(jsonfilter_value "$stats" '@.routes')"
+	neighbor_count="$(jsonfilter_value "$stats" '@.peer_sessions_up')"
+	agent_count="$(jsonfilter -q -s "$agents" -e '@.agents[*].agent_id' 2>/dev/null | wc -l | tr -d ' ')"
+	generation="$(config_generation)"
+	[ "$cloud_enabled" = 1 ] || cloud_friendly=disabled
+
+	overall=ready
+	action=none
+	if [ -z "$stats" ]; then
+		overall=offline
+		action=open_developer
+	elif [ "$cloud_enabled" = 1 ] && [ "$paired" = 0 ]; then
+		overall=needs_attention
+		action=pair_cloud
+	elif [ "$cloud_enabled" = 1 ] && [ "$cloud_friendly" != ready ] && [ "$cloud_friendly" != connecting ]; then
+		overall=needs_attention
+		action=check_cloud
+	elif [ "$router_enabled" = 0 ]; then
+		overall=needs_attention
+		action=enable_router_network
+	elif [ "$agent_enabled" = 0 ]; then
+		overall=needs_attention
+		action=enable_agent_services
+	fi
+
+	json_init
+	json_add_int generation "${generation:-0}"
+	json_add_string overall "$overall"
+	json_add_string recommended_action "$action"
+	json_add_string updated_at "${updated:-$(date -Iseconds 2>/dev/null || date)}"
+
+	json_add_object cloud
+	json_add_boolean enabled "$cloud_enabled"
+	json_add_boolean paired "$paired"
+	json_add_boolean profile_available "$(cloud_origin_available && printf 1 || printf 0)"
+	json_add_string state "$cloud_friendly"
+	json_add_string transport "$transport"
+	json_add_int registered_agents "${registered:-0}"
+	json_close_object
+
+	json_add_object router_network
+	json_add_boolean enabled "$router_enabled"
+	json_add_string state "$([ "$router_enabled" = 1 ] && printf ready || printf disabled)"
+	json_add_int neighbors "${neighbor_count:-0}"
+	json_add_int routes "${route_count:-0}"
+	json_close_object
+
+	json_add_object agent_services
+	json_add_boolean enabled "$agent_enabled"
+	json_add_string state "$([ "$agent_enabled" = 1 ] && printf ready || printf disabled)"
+	json_add_int agents "${agent_count:-0}"
+	json_close_object
+
+	add_neighbors "$neighbors"
+	add_agents "$agents"
+	add_routes "$routes"
+	json_dump
+}
+
+remember_option() {
+	local package="$1" section="$2" option="$3" prefix="$4" value
+	value="$(uci -q get "$package.$section.$option" 2>/dev/null)"
+	export "${prefix}_present=0"
+	if uci -q get "$package.$section.$option" >/dev/null 2>&1; then
+		export "${prefix}_present=1"
+	fi
+	export "${prefix}_value=$value"
+}
+
+restore_option() {
+	local package="$1" section="$2" option="$3" prefix="$4" present value
+	eval "present=\$${prefix}_present"
+	eval "value=\$${prefix}_value"
+	if [ "$present" = 1 ]; then
+		uci set "$package.$section.$option=$value"
+	else
+		uci -q delete "$package.$section.$option"
+	fi
+}
+
+reload_feature() {
+	case "$1" in
+		cloud) /etc/init.d/nexus-cloud reload >/dev/null 2>&1 ;;
+		router_network) /etc/init.d/agentd reload >/dev/null 2>&1 ;;
+		agent_services)
+			/etc/init.d/agent-gw reload >/dev/null 2>&1 &&
+			/etc/init.d/agent-adapter reload >/dev/null 2>&1
+			;;
+		*) return 1 ;;
+	esac
+}
+
+verify_feature() {
+	local feature="$1" enabled="$2"
+	[ "$enabled" = 1 ] || return 0
+	case "$feature" in
+		cloud) service_running nexus-cloud ;;
+		router_network) service_running agentd ;;
+		agent_services) service_running agent-gw && service_running agent-adapter ;;
+		*) return 1 ;;
+	esac
+}
+
+wait_for_feature() {
+	local feature="$1" enabled="$2" attempt=0
+	[ "$enabled" = 1 ] || return 0
+	while [ "$attempt" -lt 5 ]; do
+		verify_feature "$feature" "$enabled" && return 0
+		attempt=$((attempt + 1))
+		sleep 1
+	done
+	return 1
+}
+
+set_feature_locked() {
+	local feature="$1" enabled="$2"
+	case "$feature" in
+		cloud)
+			remember_option nexus_cloud main enabled old_cloud
+			uci set "nexus_cloud.main.enabled=$enabled" || return 1
+			if ! uci commit nexus_cloud; then
+				restore_option nexus_cloud main enabled old_cloud
+				uci commit nexus_cloud
+				return 1
+			fi
+			if ! reload_feature cloud || ! wait_for_feature cloud "$enabled"; then
+				restore_option nexus_cloud main enabled old_cloud
+				uci commit nexus_cloud
+				reload_feature cloud || true
+				return 1
+			fi
+			;;
+		router_network)
+			remember_option agent main enabled old_router_core
+			remember_option agent main peer_transport_enabled old_peer_transport
+			remember_option agent main peer_listener_enabled old_peer_listener
+			remember_option agent main discovery_enabled old_discovery
+			remember_option agent main discovery_publish_enabled old_publish
+			[ "$enabled" = 1 ] && uci set agent.main.enabled=1
+			uci set "agent.main.peer_transport_enabled=$enabled"
+			uci set "agent.main.peer_listener_enabled=$enabled"
+			uci set "agent.main.discovery_enabled=$enabled"
+			uci set "agent.main.discovery_publish_enabled=$enabled"
+			if ! uci commit agent; then
+				restore_option agent main enabled old_router_core
+				restore_option agent main peer_transport_enabled old_peer_transport
+				restore_option agent main peer_listener_enabled old_peer_listener
+				restore_option agent main discovery_enabled old_discovery
+				restore_option agent main discovery_publish_enabled old_publish
+				uci commit agent
+				return 1
+			fi
+			if ! reload_feature router_network || ! wait_for_feature router_network "$enabled"; then
+				restore_option agent main enabled old_router_core
+				restore_option agent main peer_transport_enabled old_peer_transport
+				restore_option agent main peer_listener_enabled old_peer_listener
+				restore_option agent main discovery_enabled old_discovery
+				restore_option agent main discovery_publish_enabled old_publish
+				uci commit agent
+				reload_feature router_network || true
+				return 1
+			fi
+			;;
+		agent_services)
+			remember_option agent_gateway main registration_enabled old_registration
+			remember_option agent_gateway main invoke_enabled old_invoke
+			remember_option agent_gateway main lan_sdk_enabled old_lan_sdk
+			remember_option agent_gateway main lan_backend_enabled old_lan_backend
+			remember_option agent_adapter main enabled old_adapter
+			uci set "agent_gateway.main.registration_enabled=$enabled"
+			uci set "agent_gateway.main.invoke_enabled=$enabled"
+			uci set "agent_gateway.main.lan_sdk_enabled=$enabled"
+			uci set "agent_gateway.main.lan_backend_enabled=$enabled"
+			uci set "agent_adapter.main.enabled=$enabled"
+			if ! uci commit agent_gateway || ! uci commit agent_adapter; then
+				restore_option agent_gateway main registration_enabled old_registration
+				restore_option agent_gateway main invoke_enabled old_invoke
+				restore_option agent_gateway main lan_sdk_enabled old_lan_sdk
+				restore_option agent_gateway main lan_backend_enabled old_lan_backend
+				restore_option agent_adapter main enabled old_adapter
+				uci commit agent_gateway
+				uci commit agent_adapter
+				return 1
+			fi
+			if ! reload_feature agent_services || ! wait_for_feature agent_services "$enabled"; then
+				restore_option agent_gateway main registration_enabled old_registration
+				restore_option agent_gateway main invoke_enabled old_invoke
+				restore_option agent_gateway main lan_sdk_enabled old_lan_sdk
+				restore_option agent_gateway main lan_backend_enabled old_lan_backend
+				restore_option agent_adapter main enabled old_adapter
+				uci commit agent_gateway
+				uci commit agent_adapter
+				reload_feature agent_services || true
+				return 1
+			fi
+			;;
+		*) return 2 ;;
+	esac
+	return 0
+}
+
+set_feature() {
+	local input feature enabled expected current result
+	input="$(cat)"
+	json_load "$input" 2>/dev/null || { json_reply_error INVALID_REQUEST 'The request is not valid JSON.'; return; }
+	json_get_var feature feature
+	json_get_var enabled enabled
+	json_get_var expected expected_generation
+	case "$feature" in cloud|router_network|agent_services) ;; *) json_reply_error INVALID_FEATURE 'Unknown Nexus feature.'; return ;; esac
+	case "$enabled" in 1|true) enabled=1 ;; 0|false) enabled=0 ;; *) json_reply_error INVALID_REQUEST 'enabled must be a boolean.'; return ;; esac
+	lock -w 10 "$LOCK_FILE" || { json_reply_error BUSY 'Another Nexus configuration change is in progress.'; return; }
+	current="$(config_generation)"
+	if [ -n "$expected" ] && [ "$expected" != "$current" ]; then
+		lock -u "$LOCK_FILE"
+		json_reply_error CONFIGURATION_CHANGED 'The Router configuration changed. Refresh before trying again.'
+		return
+	fi
+	set_feature_locked "$feature" "$enabled"
+	result=$?
+	lock -u "$LOCK_FILE"
+	case "$result" in
+		0) json_reply_ok "$([ "$enabled" = 1 ] && printf ready || printf disabled)" ;;
+		2) json_reply_error INVALID_FEATURE 'Unknown Nexus feature.' ;;
+		*) json_reply_error APPLY_FAILED 'The Router could not apply and verify this feature. The previous settings were restored.' ;;
+	esac
+}
+
+pair_cloud() {
+	local input code expected current base enrollment
+	input="$(cat)"
+	json_load "$input" 2>/dev/null || { json_reply_error INVALID_REQUEST 'The request is not valid JSON.'; return; }
+	json_get_var code pairing_code
+	json_get_var expected expected_generation
+	case "$code" in
+		''|*[!A-Za-z0-9._~-]*) json_reply_error INVALID_PAIRING_CODE 'Enter the one-time pairing code from Nexus Cloud.'; return ;;
+	esac
+	[ "${#code}" -le 256 ] || { json_reply_error INVALID_PAIRING_CODE 'The pairing code is too long.'; return; }
+	lock -w 10 "$LOCK_FILE" || { json_reply_error BUSY 'Another Nexus configuration change is in progress.'; return; }
+	current="$(config_generation)"
+	if [ -n "$expected" ] && [ "$expected" != "$current" ]; then
+		lock -u "$LOCK_FILE"
+		json_reply_error CONFIGURATION_CHANGED 'The Router configuration changed. Refresh before trying again.'
+		return
+	fi
+	base="$(uci_value nexus_cloud main base_url '')"
+	enrollment="$(uci_value nexus_cloud main enrollment_url '')"
+	[ -n "$base" ] || base="$(cloud_profile_value base_url)"
+	[ -n "$enrollment" ] || enrollment="$(cloud_profile_value enrollment_url)"
+	case "$base" in
+		https://*) ;;
+		*)
+			lock -u "$LOCK_FILE"
+			json_reply_error CLOUD_PROFILE_MISSING 'This firmware does not contain a Nexus Cloud profile. Update the firmware or configure it in Developer mode.'
+			return
+			;;
+	esac
+	remember_option nexus_cloud main base_url old_pair_base
+	remember_option nexus_cloud main enrollment_url old_pair_enrollment
+	remember_option nexus_cloud main pairing_code old_pair_code
+	remember_option nexus_cloud main enabled old_pair_enabled
+	[ -n "$(uci_value nexus_cloud main base_url '')" ] || uci set "nexus_cloud.main.base_url=$base"
+	[ -z "$enrollment" ] || [ -n "$(uci_value nexus_cloud main enrollment_url '')" ] || uci set "nexus_cloud.main.enrollment_url=$enrollment"
+	uci set "nexus_cloud.main.pairing_code=$code"
+	uci set nexus_cloud.main.enabled=1
+	if ! uci commit nexus_cloud || ! reload_feature cloud || ! wait_for_feature cloud 1; then
+		restore_option nexus_cloud main base_url old_pair_base
+		restore_option nexus_cloud main enrollment_url old_pair_enrollment
+		restore_option nexus_cloud main pairing_code old_pair_code
+		restore_option nexus_cloud main enabled old_pair_enabled
+		uci commit nexus_cloud
+		reload_feature cloud || true
+		lock -u "$LOCK_FILE"
+		json_reply_error APPLY_FAILED 'The Router could not start Nexus Cloud pairing.'
+		return
+	fi
+	lock -u "$LOCK_FILE"
+	json_reply_ok pairing
+}
+
+refresh_status() {
+	ubus -S call agent discovery_refresh '{}' >/dev/null 2>&1 || true
+	ubus -S call agent cross_discovery_refresh '{}' >/dev/null 2>&1 || true
+	ubus -S call agent relay_refresh '{}' >/dev/null 2>&1 || true
+	overview
+}
+
+case "$1" in
+	list)
+		printf '%s\n' '{"overview":{},"set_feature":{"feature":"","enabled":true,"expected_generation":32},"pair_cloud":{"pairing_code":"","expected_generation":32},"refresh":{}}'
+		;;
+	call)
+		case "$2" in
+			overview) overview ;;
+			set_feature) set_feature ;;
+			pair_cloud) pair_cloud ;;
+			refresh) refresh_status ;;
+			*) exit 1 ;;
+		esac
+		;;
+	*) exit 1 ;;
+esac

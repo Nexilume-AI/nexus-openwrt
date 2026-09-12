@@ -1,0 +1,253 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=97
+STOP=8
+
+STUNNEL_CONFIG=/var/etc/agent-gw-stunnel.conf
+
+valid_endpoint() {
+	case "$1" in
+		*[!A-Za-z0-9.:_\[\]-]*|'') return 1 ;;
+	esac
+	return 0
+}
+
+safe_credential_path() {
+	case "$1" in
+		*[!A-Za-z0-9._/-]*|'') return 1 ;;
+	esac
+	case "$1" in
+		/etc/agent-gw/*) ;;
+		*) return 1 ;;
+	esac
+	case "$1" in
+		*..*) return 1 ;;
+	esac
+	[ -f "$1" ]
+}
+
+start_service() {
+	local auth_mode mtls_enabled jwt_required transport listen plain_listen stunnel_listen backend cert key client_ca tls_min
+	local public_enabled public_prefix bridge adapter token_file public_port
+	local max_connections no_jwt_lan_enabled no_jwt_lan_listen
+	local lan_sdk_enabled lan_sdk_listen
+	local lan_bridge_token_file
+
+	config_load agent_gateway
+	config_get_bool mtls_enabled main mtls_enabled 0
+	config_get transport main public_transport auto
+	config_get_bool jwt_required main jwt_required 0
+	config_get auth_mode main auth_mode
+	case "$auth_mode" in
+		none) jwt_required=0 ;;
+		jwt) jwt_required=1 ;;
+		'') [ "$jwt_required" -eq 1 ] && auth_mode=jwt || auth_mode=none ;;
+		*) logger -t agent-edge "invalid auth_mode"; return 1 ;;
+	esac
+	config_get_bool no_jwt_lan_enabled main no_jwt_lan_enabled 0
+	config_get no_jwt_lan_listen main no_jwt_lan_listen 0.0.0.0:7445
+	config_get_bool lan_sdk_enabled main lan_sdk_enabled 0
+	config_get lan_sdk_listen main lan_sdk_listen 0.0.0.0:7446
+	lan_bridge_token_file=/var/run/agent-gw/lan-bridge.token
+	config_get listen main mtls_listen 0.0.0.0:7443
+	config_get backend main listen 127.0.0.1:7788
+	config_get cert main mtls_server_cert /etc/agent-gw/tls/server.crt
+	config_get key main mtls_server_key /etc/agent-gw/tls/server.key
+	config_get client_ca main mtls_client_ca /etc/agent-gw/tls/client-ca.crt
+	config_get tls_min main mtls_tls_min 1.3
+	config_get bridge main public_ingress_bridge_listen 127.0.0.1:7791
+	config_get adapter main public_ingress_adapter_backend 127.0.0.1:7790
+	config_get token_file main public_ingress_token_file \
+		/var/run/agent-gw/public-ingress.token
+	config_get public_port main public_ingress_port 7443
+	config_get max_connections main public_ingress_max_connections 32
+	config_load agent
+	config_get_bool public_enabled main public_ipv6_enabled 0
+	config_get public_prefix main public_ipv6_prefix
+
+	case "$transport" in
+		auto) [ "$mtls_enabled" -eq 1 ] && transport=mtls || transport=disabled ;;
+		mtls) ;;
+		http) plain_listen="[::]:$public_port" ;;
+		disabled) ;;
+		*) logger -t agent-edge "invalid public transport mode"; return 1 ;;
+	esac
+	valid_endpoint "$backend" || return 1
+	valid_endpoint "$adapter" || return 1
+	case "$backend" in 127.0.0.1:*|\[::1\]:*) ;; *) return 1 ;; esac
+	case "$adapter" in 127.0.0.1:*|\[::1\]:*) ;; *) return 1 ;; esac
+	if [ "$no_jwt_lan_enabled" -eq 1 ]; then
+		[ "$auth_mode" = none ] || {
+			logger -t agent-edge "No JWT LAN listener requires auth_mode=none"
+			return 1
+		}
+		valid_endpoint "$no_jwt_lan_listen" || return 1
+		procd_open_instance no-jwt-lan
+		procd_set_param command /usr/sbin/agent-edge-bridge
+		procd_append_param command -l "$no_jwt_lan_listen"
+		procd_append_param command -g "$backend"
+		procd_append_param command -d "$adapter"
+		procd_append_param command -c "$max_connections"
+		procd_set_param user agent-edge
+		procd_set_param group agentd
+		procd_set_param respawn 3600 5 5
+		procd_set_param limits core="0 0" nofile="512 512"
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_set_param file /etc/config/agent_gateway
+		procd_close_instance
+	fi
+	if [ "$lan_sdk_enabled" -eq 1 ]; then
+		[ "$auth_mode" = jwt ] || {
+			logger -t agent-edge "LAN SDK listener requires auth_mode=jwt"
+			return 1
+		}
+		valid_endpoint "$lan_sdk_listen" || return 1
+		[ "$lan_sdk_listen" != "$no_jwt_lan_listen" ] || return 1
+		procd_open_instance lan-sdk
+		procd_set_param command /usr/sbin/agent-edge-bridge
+		procd_append_param command -l "$lan_sdk_listen"
+		[ -s "$lan_bridge_token_file" ] || return 1
+		procd_append_param command -T "$lan_bridge_token_file"
+		procd_append_param command -g "$backend"
+		procd_append_param command -d "$adapter"
+		procd_append_param command -c "$max_connections"
+		procd_set_param user agent-edge
+		procd_set_param group agentd
+		procd_set_param respawn 3600 5 5
+		procd_set_param limits core="0 0" nofile="512 512"
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_set_param file /etc/config/agent_gateway "$lan_bridge_token_file"
+		procd_close_instance
+	fi
+	[ "$transport" != disabled ] || return 0
+	if [ "$transport" = mtls ]; then
+		[ "$mtls_enabled" -eq 1 ] || return 1
+		valid_endpoint "$listen" || return 1
+	else
+		[ "$public_enabled" -eq 1 ] || return 1
+		valid_endpoint "$plain_listen" || return 1
+	fi
+	# UCI and LuCI use the conventional unambiguous `[IPv6]:port` spelling,
+	# while OpenWrt stunnel 5.75 passes the brackets verbatim to getaddrinfo.
+	# Normalize only the generated stunnel endpoint (`[::]:7443` ->
+	# `:::7443`); retain the original value for validation and UI round trips.
+	case "$listen" in
+		\[*\]:*)
+			stunnel_listen="$(printf '%s' "$listen" |
+				sed 's/^\[\(.*\)\]:/\1:/')"
+			;;
+		*) stunnel_listen="$listen" ;;
+	esac
+	if [ "$transport" = mtls ]; then
+		safe_credential_path "$cert" || return 1
+		safe_credential_path "$key" || return 1
+		safe_credential_path "$client_ca" || return 1
+	fi
+	valid_endpoint "$backend" || return 1
+	valid_endpoint "$bridge" || return 1
+	valid_endpoint "$adapter" || return 1
+	case "$backend" in
+		127.0.0.1:*|\[::1\]:*) ;;
+		*) return 1 ;;
+	esac
+	if [ "$transport" = mtls ]; then
+		case "$tls_min" in
+			1.2) tls_min=TLSv1.2 ;;
+			1.3) tls_min=TLSv1.3 ;;
+			*) return 1 ;;
+		esac
+	fi
+	if [ "$public_enabled" -eq 1 ]; then
+		[ -n "$public_prefix" ] && [ -s "$token_file" ] || return 1
+		case "$bridge" in 127.0.0.1:*) ;; *) return 1 ;; esac
+		case "$adapter" in 127.0.0.1:*) ;; *) return 1 ;; esac
+		case "$public_port" in *[!0-9]*|'') return 1 ;; esac
+		[ "$public_port" -gt 0 ] && [ "$public_port" -le 65535 ] || return 1
+		case "$max_connections" in *[!0-9]*|'') return 1 ;; esac
+		[ "$max_connections" -gt 0 ] && [ "$max_connections" -le 128 ] || return 1
+		if [ "$transport" = mtls ]; then
+			case "$listen" in *:"$public_port"|*]:"$public_port") ;; *) return 1 ;; esac
+		else
+			case "$plain_listen" in \[*\]:"$public_port") ;; *) return 1 ;; esac
+		fi
+		procd_open_instance public-ingress
+		procd_set_param command /usr/sbin/agent-edge-bridge
+		if [ "$transport" = http ]; then
+			procd_append_param command -r "$plain_listen"
+		else
+			procd_append_param command -a "$bridge"
+		fi
+		procd_append_param command -g "$backend"
+		procd_append_param command -d "$adapter"
+		procd_append_param command -p "$public_prefix"
+		procd_append_param command -t "$token_file"
+		procd_append_param command -P "$public_port"
+		procd_append_param command -c "$max_connections"
+		procd_set_param user agent-edge
+		procd_set_param group agentd
+		procd_set_param respawn 3600 5 5
+		procd_set_param limits core="0 0" nofile="512 512"
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_set_param file /etc/config/agent_gateway /etc/config/agentd \
+			"$token_file"
+		procd_close_instance
+		[ "$transport" = mtls ] || return 0
+		backend="$bridge"
+	fi
+
+	mkdir -p /var/etc
+	umask 077
+	{
+		echo "foreground = yes"
+		echo "pid ="
+		# The OpenWrt stunnel package does not provision a stunnel account.
+		# Reuse the dedicated, unprivileged Agent data-plane identity.
+		echo "setuid = agent-edge"
+		echo "setgid = agentd"
+		echo "socket = l:TCP_NODELAY=1"
+		echo "socket = r:TCP_NODELAY=1"
+		echo "[agent-gw]"
+		echo "client = no"
+		echo "accept = $stunnel_listen"
+		echo "connect = $backend"
+		[ "$public_enabled" -eq 1 ] && echo "protocol = proxy"
+		echo "cert = $cert"
+		echo "key = $key"
+		echo "CAfile = $client_ca"
+		echo "verifyChain = yes"
+		echo "requireCert = yes"
+		echo "sslVersionMin = $tls_min"
+		echo "options = NO_TICKET"
+		# The authenticated HTTP request carries the application deadline.
+		# Do not add a shorter transport-idle deadline here: interactive tools
+		# can legitimately remain byte-idle while waiting for caller input.
+		echo "TIMEOUTclose = 0"
+	} >"$STUNNEL_CONFIG"
+
+	procd_open_instance
+	procd_set_param command /usr/bin/stunnel "$STUNNEL_CONFIG"
+	procd_set_param respawn 3600 5 5
+	procd_set_param limits core="0 0" nofile="1024 1024"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file /etc/config/agent_gateway "$cert" "$key" "$client_ca"
+	procd_close_instance
+}
+
+stop_service() {
+	rm -f "$STUNNEL_CONFIG"
+}
+
+reload_service() {
+	# Listener, TLS, and backend settings are materialized at process startup.
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger agent_gateway
+}

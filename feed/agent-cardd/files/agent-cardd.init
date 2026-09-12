@@ -1,0 +1,54 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=96
+STOP=9
+
+start_service() {
+	local enabled poll_seconds fetch_timeout trust_public_key
+	local expected_key_id expected_issuer
+	local directory_bundle_uri directory_root_public_key
+
+	config_load agent_card
+	config_get_bool enabled main enabled 0
+	[ "$enabled" -eq 1 ] || return 0
+	config_get poll_seconds main poll_seconds 30
+	config_get fetch_timeout main fetch_timeout_seconds 10
+	config_get trust_public_key main trust_public_key \
+		/etc/agentd/card-trust.pub
+	config_get expected_key_id main expected_key_id nexus-card-2026
+	config_get expected_issuer main expected_issuer nexus-local-trust
+	config_get directory_bundle_uri main directory_bundle_uri ''
+	config_get directory_root_public_key main directory_root_public_key \
+		/etc/agentd/directory-root.pub
+
+	[ -n "$directory_bundle_uri" ] || [ -s "$trust_public_key" ] || {
+		logger -t agent-cardd "trust key missing: $trust_public_key"
+		return 1
+	}
+	[ -z "$directory_bundle_uri" ] || [ -s "$directory_root_public_key" ] || {
+		logger -t agent-cardd \
+			"Directory root key missing: $directory_root_public_key"
+		return 1
+	}
+
+	procd_open_instance
+	procd_set_param command /usr/sbin/agent-cardd
+	procd_append_param command "$poll_seconds" "$fetch_timeout" \
+		"$trust_public_key" "$expected_key_id" "$expected_issuer" \
+		"$directory_bundle_uri" "$directory_root_public_key"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	if [ -n "$directory_bundle_uri" ]; then
+		procd_set_param file /etc/config/agent_card \
+			"$directory_root_public_key"
+	else
+		procd_set_param file /etc/config/agent_card "$trust_public_key"
+	fi
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger agent_card
+}

@@ -1,0 +1,46 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=95
+STOP=10
+
+start_service() {
+	local enabled auth_mode jwt_required jwks_url jwks_file ca_file
+
+	config_load agent_gateway
+	config_get_bool enabled main enabled 1
+	config_get_bool jwt_required main jwt_required 0
+	config_get auth_mode main auth_mode
+	case "$auth_mode" in
+		none) jwt_required=0 ;;
+		jwt) jwt_required=1 ;;
+		'') : ;;
+		*) logger -t agent-jwks "invalid auth_mode"; return 1 ;;
+	esac
+	config_get jwks_url main jwt_jwks_url
+	config_get jwks_file main jwt_jwks_file
+	config_get ca_file main jwt_jwks_ca_file /etc/ssl/certs/ca-certificates.crt
+
+	[ "$enabled" -eq 1 ] || return 0
+	[ "$jwt_required" -eq 1 ] || return 0
+	[ -n "$jwks_url" ] || return 0
+	[ -n "$jwks_file" ] || return 0
+
+	procd_open_instance
+	procd_set_param command /usr/sbin/agent-jwks-refresh
+	procd_set_param respawn 3600 5 5
+	procd_set_param limits core="0 0" nofile="64 64"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file /etc/config/agent_gateway "$ca_file"
+	procd_close_instance
+}
+
+reload_service() {
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger agent_gateway
+}

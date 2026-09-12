@@ -1,0 +1,14 @@
+#!/bin/sh
+
+case "$1" in
+	list)
+		printf '%s\n' '{"check":{}}'
+		;;
+	call)
+		case "$2" in
+			check) exec /usr/sbin/nexus-cloud-tls-check ;;
+			*) exit 1 ;;
+		esac
+		;;
+	*) exit 1 ;;
+esac

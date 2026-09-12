@@ -1,0 +1,368 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=96
+STOP=9
+
+append_remote_backend_map() {
+	procd_append_param command -n "$1"
+}
+
+generate_runtime_secret() {
+	local output="$1"
+
+	umask 077
+	# Two kernel-generated UUIDs provide 256 random bits without requiring the
+	# optional od/coreutils package.
+	{
+		cat /proc/sys/kernel/random/uuid
+		cat /proc/sys/kernel/random/uuid
+	} | tr -d '\n-' >"$output" || return 1
+	[ "$(wc -c <"$output")" -eq 64 ]
+}
+
+start_service() {
+	local enabled listen ipc_socket max_envelope ipc_timeout
+	local max_inflight rate_per_second rate_burst jail
+	local auth_mode jwt_required jwt_public_key jwt_kid jwt_issuer jwt_audience
+	local jwt_jwks_file jwt_clock_skew jwt_max_lifetime
+	local transaction_replay_capacity
+	local forwarding_assertion_enabled forwarding_private_key
+	local forwarding_key_id forwarding_issuer forwarding_ttl
+	local invoke_enabled registration_enabled backend_timeout interactive_backend_timeout max_backend_response
+	local stream_enabled stream_idle_timeout max_stream_event
+	local stream_resume_enabled stream_resume_capacity stream_resume_ttl
+	local lan_backend_enabled
+	local remote_backend_enabled remote_backend_ca_file remote_backend_ca_bundle_id
+	local retry_enabled max_route_attempts retry_attempt_timeout
+	local retry_min_remaining
+	local public_ingress_enabled public_ingress_token_file runtime_dir token_tmp token_valid
+	local public_descriptor_enabled public_tls_server_name public_ca_bundle_id public_transport mtls_enabled public_scheme
+	local public_ingress_port
+	local internal_invoke_enabled internal_invoke_token_digest_file
+	local internal_invoke_generation
+	local lan_sdk_enabled lan_bridge_token_file lan_session_key_file secret_tmp secret_file
+	local cloud_public_origin cloud_trust_ca_file
+
+	config_load agent_gateway
+	config_get_bool enabled main enabled 1
+	[ "$enabled" -eq 1 ] || return 0
+
+	config_get listen main listen 127.0.0.1:7788
+	config_get ipc_socket main ipc_socket /var/run/agentd/lookup.sock
+	config_get max_envelope main max_envelope_bytes 65536
+	config_get ipc_timeout main ipc_timeout_ms 200
+	config_get max_inflight main max_inflight 32
+	config_get rate_per_second main rate_per_second 50
+	config_get rate_burst main rate_burst 100
+	config_get_bool jwt_required main jwt_required 0
+	config_get auth_mode main auth_mode
+	case "$auth_mode" in
+		none) jwt_required=0 ;;
+		jwt) jwt_required=1 ;;
+		'') [ "$jwt_required" -eq 1 ] && auth_mode=jwt || auth_mode=none ;;
+		*) return 1 ;;
+	esac
+	config_get jwt_public_key main jwt_public_key /etc/agent-gw/jwt-public.pem
+	config_get jwt_kid main jwt_kid default
+	config_get jwt_jwks_file main jwt_jwks_file
+	config_get jwt_issuer main jwt_issuer https://issuer.invalid
+	config_get jwt_audience main jwt_audience nexus-agent-router
+	config_get jwt_clock_skew main jwt_clock_skew_seconds 30
+	config_get jwt_max_lifetime main jwt_max_lifetime_seconds 300
+	config_get transaction_replay_capacity main transaction_replay_capacity 512
+	config_get_bool forwarding_assertion_enabled main \
+		forwarding_assertion_enabled 0
+	[ "$auth_mode" = jwt ] || forwarding_assertion_enabled=0
+	config_get forwarding_private_key main forwarding_private_key \
+		/etc/agent-gw/forwarding-private.pem
+	config_get forwarding_key_id main forwarding_key_id router-default
+	config_get forwarding_issuer main forwarding_issuer router-local
+	config_get forwarding_ttl main forwarding_ttl_seconds 30
+	config_get_bool invoke_enabled main invoke_enabled 0
+	config_get_bool registration_enabled main registration_enabled 0
+	config_get backend_timeout main backend_timeout_ms 5000
+	config_get interactive_backend_timeout main interactive_backend_timeout_ms 3600000
+	config_get max_backend_response main max_backend_response_bytes 262144
+	config_get_bool stream_enabled main stream_enabled 0
+	config_get stream_idle_timeout main stream_idle_timeout_ms 15000
+	config_get max_stream_event main max_stream_event_bytes 65536
+	config_get_bool stream_resume_enabled main stream_resume_enabled 1
+	config_get stream_resume_capacity main stream_resume_capacity 512
+	config_get stream_resume_ttl main stream_resume_ttl_seconds 300
+	config_get_bool lan_backend_enabled main lan_backend_enabled 1
+	config_get_bool remote_backend_enabled main remote_backend_enabled 1
+	config_get remote_backend_ca_file main remote_backend_ca_file \
+		/etc/ssl/certs/ca-certificates.crt
+	config_get remote_backend_ca_bundle_id main remote_backend_ca_bundle_id system
+	config_get_bool retry_enabled main retry_enabled 0
+	config_get max_route_attempts main max_route_attempts 2
+	config_get retry_attempt_timeout main retry_attempt_timeout_ms 1500
+	config_get retry_min_remaining main retry_min_remaining_ms 100
+	config_get public_ingress_token_file main public_ingress_token_file \
+		/var/run/agent-gw/public-ingress.token
+	config_get_bool public_descriptor_enabled main public_descriptor_enabled 0
+	config_get public_transport main public_transport auto
+	config_get_bool mtls_enabled main mtls_enabled 0
+	config_get public_tls_server_name main public_tls_server_name
+	config_get public_ca_bundle_id main public_ca_bundle_id
+	config_get public_ingress_port main public_ingress_port 7443
+	config_get_bool lan_sdk_enabled main lan_sdk_enabled 0
+	config_get cloud_public_origin main cloud_public_origin ''
+	config_get cloud_trust_ca_file main cloud_trust_ca_file \
+		/etc/ssl/certs/ca-certificates.crt
+	if [ -n "$cloud_public_origin" ]; then
+		case "$cloud_public_origin" in
+			https://*/*|*' '*|*'@'*|*'?'*|*'#'*) return 1 ;;
+			https://*) ;;
+			*) return 1 ;;
+		esac
+		case "$cloud_trust_ca_file" in
+			/etc/ssl/certs/*|/etc/agent-gw/*) ;;
+			*) return 1 ;;
+		esac
+		case "$cloud_trust_ca_file" in *..*) return 1 ;; esac
+	fi
+	lan_bridge_token_file=/var/run/agent-gw/lan-bridge.token
+	lan_session_key_file=/var/run/agent-gw/lan-session.key
+	config_get_bool internal_invoke_enabled main internal_invoke_enabled 0
+	config_get internal_invoke_token_digest_file main \
+		internal_invoke_token_digest_file \
+		/etc/agent-gw/nexus-cloud-gateway-token.sha256
+	config_get internal_invoke_generation main internal_invoke_generation ''
+	case "$internal_invoke_token_digest_file" in
+		/etc/agent-gw/nexus-cloud-gateway-token.sha256) ;;
+		*) return 1 ;;
+	esac
+	if [ "$internal_invoke_enabled" -eq 1 ]; then
+		[ "$invoke_enabled" -eq 1 ] && [ "$remote_backend_enabled" -eq 1 ] || return 1
+		[ -f "$internal_invoke_token_digest_file" ] &&
+			[ ! -L "$internal_invoke_token_digest_file" ] || return 1
+		case "$internal_invoke_generation" in
+			????????????????????????????????) ;;
+			*) return 1 ;;
+		esac
+		case "$internal_invoke_generation" in *[!0-9a-f]*) return 1 ;; esac
+	fi
+	case "$public_transport" in
+		http) public_scheme=http ;;
+		mtls) public_scheme=https ;;
+		auto)
+			public_scheme=https
+			[ "$mtls_enabled" -eq 1 ] || public_descriptor_enabled=0
+			;;
+		disabled)
+			public_scheme=https
+			public_descriptor_enabled=0
+			;;
+		*) return 1 ;;
+	esac
+	config_get_bool jail main jail 1
+	config_load agent
+	config_get_bool public_ingress_enabled main public_ipv6_enabled 0
+	config_load agent_gateway
+	case "$public_ingress_token_file" in
+		/var/run/agent-gw/*) ;;
+		*) return 1 ;;
+	esac
+	case "$public_ingress_token_file" in *..*) return 1 ;; esac
+	mkdir -p /var/run/nexus-agent-cloud || return 1
+	chmod 0755 /var/run/nexus-agent-cloud || return 1
+	if [ "$public_ingress_enabled" -eq 1 ] || [ "$lan_sdk_enabled" -eq 1 ]; then
+		runtime_dir=/var/run/agent-gw
+		mkdir -p "$runtime_dir" || return 1
+		chown agent-gw:agentd "$runtime_dir" || return 1
+		chmod 0750 "$runtime_dir" || return 1
+	fi
+	if [ "$public_ingress_enabled" -eq 1 ]; then
+		[ "$invoke_enabled" -eq 1 ] || return 1
+		token_tmp="$public_ingress_token_file.tmp.$$"
+		# agent-edge and agent-gw must retain the same in-memory token when only
+		# the gateway reloads (for example after a JWKS refresh). Generate a new
+		# boot-scoped token only when the runtime file is absent or malformed.
+		token_valid=0
+		if [ -f "$public_ingress_token_file" ] &&
+			[ ! -L "$public_ingress_token_file" ] &&
+			[ "$(wc -c <"$public_ingress_token_file")" -eq 64 ] &&
+			grep -Eq '^[0-9a-f]{64}$' "$public_ingress_token_file"; then
+			token_valid=1
+		fi
+		if [ "$token_valid" -eq 0 ]; then
+			generate_runtime_secret "$token_tmp" || return 1
+			mv -f "$token_tmp" "$public_ingress_token_file" || return 1
+		fi
+		chown agent-gw:agentd "$public_ingress_token_file" || return 1
+		chmod 0640 "$public_ingress_token_file" || return 1
+	fi
+	if [ "$lan_sdk_enabled" -eq 1 ]; then
+		[ "$jwt_required" -eq 1 ] && [ "$registration_enabled" -eq 1 ] || return 1
+		# The bridge credential must survive a Gateway-only reload so the
+		# independently supervised bridge remains connected. The session signing
+		# key is Gateway-private and is intentionally rotated on every start.
+		token_valid=0
+		if [ -f "$lan_bridge_token_file" ] && [ ! -L "$lan_bridge_token_file" ] &&
+			[ "$(wc -c <"$lan_bridge_token_file")" -eq 64 ] &&
+			grep -Eq '^[0-9a-f]{64}$' "$lan_bridge_token_file"; then
+			token_valid=1
+		fi
+		if [ "$token_valid" -eq 0 ]; then
+			secret_tmp="$lan_bridge_token_file.tmp.$$"
+			generate_runtime_secret "$secret_tmp" || return 1
+			mv -f "$secret_tmp" "$lan_bridge_token_file" || return 1
+		fi
+		secret_tmp="$lan_session_key_file.tmp.$$"
+		generate_runtime_secret "$secret_tmp" || return 1
+		mv -f "$secret_tmp" "$lan_session_key_file" || return 1
+		chown agent-gw:agentd "$lan_bridge_token_file" "$lan_session_key_file" || return 1
+		chmod 0640 "$lan_bridge_token_file" || return 1
+		chmod 0600 "$lan_session_key_file" || return 1
+	fi
+
+	procd_open_instance
+	procd_set_param command /usr/sbin/agent-gw
+	procd_append_param command -a "$listen"
+	procd_append_param command -s "$ipc_socket"
+	procd_append_param command -b "$max_envelope"
+	procd_append_param command -t "$ipc_timeout"
+	procd_append_param command -c "$max_inflight"
+	procd_append_param command -r "$rate_per_second"
+	procd_append_param command -B "$rate_burst"
+	procd_append_param command -j "$jwt_required"
+	procd_append_param command -P "$jwt_public_key"
+	procd_append_param command -K "$jwt_kid"
+	[ -z "$jwt_jwks_file" ] ||
+		procd_append_param command -J "$jwt_jwks_file"
+	procd_append_param command -I "$jwt_issuer"
+	procd_append_param command -A "$jwt_audience"
+	procd_append_param command -S "$jwt_clock_skew"
+	procd_append_param command -T "$jwt_max_lifetime"
+	procd_append_param command -Q "$transaction_replay_capacity"
+	procd_append_param command -f "$forwarding_assertion_enabled"
+	procd_append_param command -p "$forwarding_private_key"
+	procd_append_param command -k "$forwarding_key_id"
+	procd_append_param command -u "$forwarding_issuer"
+	procd_append_param command -m "$forwarding_ttl"
+	procd_append_param command -i "$invoke_enabled"
+	procd_append_param command -g "$registration_enabled"
+	procd_append_param command -e "$backend_timeout"
+	procd_append_param command -3 "$interactive_backend_timeout"
+	procd_append_param command -R "$max_backend_response"
+	procd_append_param command -x "$stream_enabled"
+	procd_append_param command -L "$stream_idle_timeout"
+	procd_append_param command -E "$max_stream_event"
+	procd_append_param command -q "$stream_resume_enabled"
+	procd_append_param command -w "$stream_resume_capacity"
+	procd_append_param command -d "$stream_resume_ttl"
+	procd_append_param command -M "$lan_backend_enabled"
+	procd_append_param command -y "$remote_backend_enabled"
+	procd_append_param command -F "$remote_backend_ca_file"
+	procd_append_param command -W "$remote_backend_ca_bundle_id"
+	procd_append_param command -z "$retry_enabled"
+	procd_append_param command -N "$max_route_attempts"
+	procd_append_param command -O "$retry_attempt_timeout"
+	procd_append_param command -G "$retry_min_remaining"
+	procd_append_param command -X "$public_ingress_enabled"
+	procd_append_param command -Y "$public_ingress_token_file"
+	procd_append_param command -D "$public_descriptor_enabled"
+	procd_append_param command -V "$public_scheme"
+	[ -z "$public_tls_server_name" ] ||
+		procd_append_param command -H "$public_tls_server_name"
+	[ -z "$public_ca_bundle_id" ] ||
+		procd_append_param command -C "$public_ca_bundle_id"
+	procd_append_param command -U "$public_ingress_port"
+	procd_append_param command -0 "$lan_sdk_enabled"
+	procd_append_param command -1 "$lan_bridge_token_file"
+	procd_append_param command -2 "$lan_session_key_file"
+	[ -z "$cloud_public_origin" ] || {
+		procd_append_param command -4 "$cloud_public_origin"
+		procd_append_param command -5 "$cloud_trust_ca_file"
+	}
+	procd_append_param command -o "$internal_invoke_enabled"
+	procd_append_param command -l "$internal_invoke_token_digest_file"
+	[ "$internal_invoke_enabled" -ne 1 ] ||
+		procd_append_param command -Z "$internal_invoke_generation"
+	if [ "$remote_backend_enabled" -eq 1 ]; then
+		config_list_foreach main remote_backend_map \
+			append_remote_backend_map
+	fi
+	procd_set_param user agent-gw
+	procd_set_param group agentd
+	procd_set_param respawn 3600 5 5
+	procd_set_param limits core="0 0" nofile="1024 1024"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file /etc/config/agent_gateway
+	if [ "$public_ingress_enabled" -eq 1 ]; then
+		procd_append_param file "$public_ingress_token_file"
+	fi
+	if [ "$lan_sdk_enabled" -eq 1 ]; then
+		procd_append_param file "$lan_bridge_token_file" "$lan_session_key_file"
+	fi
+	if [ -n "$cloud_public_origin" ]; then
+		procd_append_param file "$cloud_trust_ca_file"
+	fi
+	if [ "$jwt_required" -eq 1 ]; then
+		if [ -n "$jwt_jwks_file" ]; then
+			procd_append_param file "$jwt_jwks_file"
+		else
+			procd_append_param file "$jwt_public_key"
+		fi
+	fi
+	if [ "$forwarding_assertion_enabled" -eq 1 ]; then
+		procd_append_param file "$forwarding_private_key"
+	fi
+	if [ "$remote_backend_enabled" -eq 1 ]; then
+		procd_append_param file "$remote_backend_ca_file"
+	fi
+	if [ "$internal_invoke_enabled" -eq 1 ]; then
+		procd_append_param file "$internal_invoke_token_digest_file"
+	fi
+
+	if [ "$jail" -eq 1 ]; then
+		procd_add_jail agent-gw log procfs ronly requirejail
+		procd_add_jail_mount /var/run/agentd
+		procd_add_jail_mount /var/run/nexus-agent-cloud
+		[ ! -d /var/run/agent-manifests ] ||
+			procd_add_jail_mount /var/run/agent-manifests
+		if [ "$jwt_required" -eq 1 ]; then
+			if [ -n "$jwt_jwks_file" ]; then
+				procd_add_jail_mount "$jwt_jwks_file"
+			else
+				procd_add_jail_mount "$jwt_public_key"
+			fi
+		fi
+		if [ "$forwarding_assertion_enabled" -eq 1 ]; then
+			procd_add_jail_mount "$forwarding_private_key"
+		fi
+		if [ "$remote_backend_enabled" -eq 1 ]; then
+			procd_add_jail_mount "$remote_backend_ca_file"
+		fi
+		if [ "$public_ingress_enabled" -eq 1 ]; then
+			procd_add_jail_mount "$public_ingress_token_file"
+		fi
+		if [ "$lan_sdk_enabled" -eq 1 ]; then
+			procd_add_jail_mount "$lan_bridge_token_file" "$lan_session_key_file"
+		fi
+		if [ -n "$cloud_public_origin" ]; then
+			procd_add_jail_mount "$cloud_trust_ca_file"
+		fi
+		if [ "$internal_invoke_enabled" -eq 1 ]; then
+			procd_add_jail_mount "$internal_invoke_token_digest_file"
+		fi
+	fi
+
+	procd_close_instance
+}
+
+reload_service() {
+	# Rebuild command-line arguments and the ujail runtime snapshot from UCI.
+	stop
+	start
+}
+
+service_triggers() {
+	# agent_gateway_runtime is emitted only after a validated JWKS cache is
+	# atomically installed.  Keeping it Gateway-only prevents a refresh loop in
+	# agent-jwks, which separately watches the persisted agent_gateway config.
+	procd_add_reload_trigger agent_gateway agent_gateway_runtime
+}

@@ -1,0 +1,95 @@
+#!/bin/sh
+
+set -eu
+
+LOCK_DIR=/var/lock/agent-jwks-update.lock
+temporary_file=
+
+cleanup() {
+	[ -z "$temporary_file" ] || rm -f "$temporary_file"
+	rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
+fail() {
+	logger -t agent-jwks "refresh rejected: $1"
+	exit 1
+}
+
+jwks_url="$(uci -q get agent_gateway.main.jwt_jwks_url || true)"
+cache_file="$(uci -q get agent_gateway.main.jwt_jwks_file || true)"
+ca_file="$(uci -q get agent_gateway.main.jwt_jwks_ca_file || true)"
+timeout="$(uci -q get agent_gateway.main.jwt_jwks_timeout_seconds || true)"
+
+[ -n "$jwks_url" ] || fail "URL is not configured"
+[ -n "$cache_file" ] || fail "cache file is not configured"
+[ -n "$ca_file" ] || fail "CA file is not configured"
+
+case "$jwks_url" in
+	https://*) ;;
+	*) fail "only HTTPS URLs are allowed" ;;
+esac
+case "$jwks_url" in
+	*[[:space:]]*|*@*) fail "URL contains a forbidden component" ;;
+esac
+case "$cache_file" in
+	/etc/agent-gw/*) ;;
+	*) fail "cache must be below /etc/agent-gw" ;;
+esac
+case "$cache_file" in
+	*..*) fail "cache path traversal is forbidden" ;;
+esac
+case "$ca_file" in
+	/etc/ssl/certs/*|/etc/agent-gw/*) ;;
+	*) fail "CA file path is outside the allowlist" ;;
+esac
+case "$ca_file" in
+	*..*) fail "CA path traversal is forbidden" ;;
+esac
+case "$timeout" in
+	''|*[!0-9]*) fail "timeout must be an integer" ;;
+esac
+[ "$timeout" -ge 1 ] && [ "$timeout" -le 30 ] ||
+	fail "timeout is outside 1..30 seconds"
+[ -f "$ca_file" ] || fail "CA file is unavailable"
+
+mkdir "$LOCK_DIR" 2>/dev/null || exit 75
+trap cleanup EXIT INT TERM
+umask 077
+temporary_file="${cache_file}.new.$$"
+
+curl --fail --silent --show-error --noproxy '*' \
+	--proto '=https' --tlsv1.2 --max-time "$timeout" \
+	--cacert "$ca_file" --output "$temporary_file" "$jwks_url" ||
+	fail "HTTPS fetch failed"
+
+size="$(wc -c < "$temporary_file")"
+case "$size" in
+	''|*[!0-9]*) fail "download size is invalid" ;;
+esac
+[ "$size" -gt 0 ] && [ "$size" -le 65536 ] ||
+	fail "download exceeds the 64 KiB bound"
+
+/usr/sbin/agent-jwks-validate "$temporary_file" >/dev/null ||
+	fail "downloaded document is not an accepted JWKS"
+
+# A periodic refresh commonly returns the same JWKS.  Do not restart the
+# Gateway in that case: restarting tears down in-flight task/chat requests
+# which may legitimately be waiting for caller input for several minutes.
+if [ -f "$cache_file" ] && cmp -s "$temporary_file" "$cache_file"; then
+	rm -f "$temporary_file"
+	temporary_file=
+	logger -t agent-jwks "validated cache unchanged"
+	exit 0
+fi
+
+mv -f "$temporary_file" "$cache_file"
+temporary_file=
+chown agent-gw:agentd "$cache_file" || fail "cache ownership update failed"
+chmod 0640 "$cache_file" || fail "cache permission update failed"
+logger -t agent-jwks "validated cache installed"
+# Do not nest rc.common inside a procd-managed child: its inherited service
+# transaction fd is not valid here during boot.  Use the Gateway-only runtime
+# trigger so refreshing JWKS cannot recursively restart this refresher.
+ubus call service event \
+	'{"type":"config.change","data":{"package":"agent_gateway_runtime"}}' \
+	>/dev/null || fail "gateway reload event failed"

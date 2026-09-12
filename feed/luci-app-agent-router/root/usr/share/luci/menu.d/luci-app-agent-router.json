@@ -1,0 +1,86 @@
+{
+	"admin/status/agent-router": {
+		"title": "Agent Routing",
+		"order": 55,
+		"action": { "type": "firstchild" },
+		"depends": { "acl": [ "luci-app-agent-router" ], "ubus": { "agent": [ "stats" ] } }
+	},
+	"admin/status/agent-router/home": {
+		"title": "User mode",
+		"order": 5,
+		"action": { "type": "view", "path": "agent-router/home" }
+	},
+	"admin/status/agent-router/developer": {
+		"title": "Developer mode",
+		"order": 90,
+		"action": { "type": "firstchild" }
+	},
+	"admin/status/agent-router/developer/overview": {
+		"title": "Overview", "order": 10,
+		"action": { "type": "view", "path": "agent-router/overview" }
+	},
+	"admin/status/agent-router/developer/setup": {
+		"title": "Quick Setup", "order": 15,
+		"action": { "type": "view", "path": "agent-router/setup" },
+		"depends": { "acl": [ "luci-app-agent-router-configure" ], "uci": { "agent": true } }
+	},
+	"admin/status/agent-router/developer/cloud": {
+		"title": "Nexus Cloud", "order": 16,
+		"action": { "type": "view", "path": "agent-router/cloud" },
+		"depends": { "acl": [ "luci-app-agent-router-configure" ], "uci": { "nexus_cloud": true } }
+	},
+	"admin/status/agent-router/developer/roles": {
+		"title": "Router Roles", "order": 17,
+		"action": { "type": "view", "path": "agent-router/roles" },
+		"depends": { "acl": [ "luci-app-agent-router-configure" ], "uci": { "nexus_roles": true } }
+	},
+	"admin/status/agent-router/developer/agents": {
+		"title": "Local Agents", "order": 18,
+		"action": { "type": "view", "path": "agent-router/agents" }
+	},
+	"admin/status/agent-router/developer/protocols": {
+		"title": "Agent APIs & Protocols", "order": 19,
+		"action": { "type": "view", "path": "agent-router/protocols" },
+		"depends": { "acl": [ "luci-app-agent-router-configure" ], "uci": { "agent_adapter": true, "agent_gateway": true } }
+	},
+	"admin/status/agent-router/developer/routes": {
+		"title": "Capability Routes", "order": 20,
+		"action": { "type": "view", "path": "agent-router/routes" }
+	},
+	"admin/status/agent-router/developer/neighbors": {
+		"title": "Neighbors & Discovery", "order": 30,
+		"action": { "type": "view", "path": "agent-router/neighbors" }
+	},
+	"admin/status/agent-router/developer/trust": {
+		"title": "Peer Trust", "order": 35,
+		"action": { "type": "view", "path": "agent-router/trust" },
+		"depends": { "acl": [ "luci-app-agent-router-trust" ] }
+	},
+	"admin/status/agent-router/developer/settings": {
+		"title": "Advanced Settings", "order": 40,
+		"action": { "type": "view", "path": "agent-router/settings" },
+		"depends": { "acl": [ "luci-app-agent-router-configure" ], "uci": { "agent": true } }
+	},
+	"admin/status/agent-router/developer/peers": {
+		"title": "Static Peers", "order": 50,
+		"action": { "type": "view", "path": "agent-router/peers" },
+		"depends": { "acl": [ "luci-app-agent-router-configure" ], "uci": { "agent_peers": true } }
+	},
+	"admin/status/agent-router/developer/policies": {
+		"title": "Policy RIB", "order": 60,
+		"action": { "type": "view", "path": "agent-router/policies" },
+		"depends": { "acl": [ "luci-app-agent-router-configure" ], "uci": { "agent_policy": true } }
+	},
+	"admin/status/agent-router/overview": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/setup": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/cloud": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/roles": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/agents": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/protocols": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/routes": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/neighbors": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/trust": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/settings": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/peers": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } },
+	"admin/status/agent-router/policies": { "hidden": true, "action": { "type": "alias", "path": "admin/status/agent-router/home" } }
+}

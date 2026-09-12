@@ -1,0 +1,69 @@
+{
+  "nexus-agent-router-read": {
+    "description": "Read Nexus Agent routing state",
+    "read": {
+      "ubus": {
+        "agent": [
+          "lookup",
+          "route",
+          "policy",
+          "routes",
+          "agents",
+          "addresses",
+          "neighbors",
+          "discoveries",
+          "cross_discoveries",
+          "promotions",
+          "cards",
+          "card_trust",
+          "relay",
+          "recovery",
+          "stats"
+        ]
+      }
+    }
+  },
+  "nexus-agent-router-admin": {
+    "description": "Administer Nexus Agent routing state",
+    "read": {
+      "ubus": {
+        "agent": [
+          "lookup",
+          "route",
+          "policy",
+          "routes",
+          "agents",
+          "addresses",
+          "neighbors",
+          "discoveries",
+          "cross_discoveries",
+          "promotions",
+          "cards",
+          "card_trust",
+          "relay",
+          "recovery",
+          "stats"
+        ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "agent": [
+          "register",
+          "renew",
+          "unregister",
+          "reload",
+          "reload_policy",
+          "reload_peers",
+          "discovery_refresh",
+          "cross_discovery_refresh",
+          "discovery_promote",
+          "discovery_revoke",
+          "card_revoke",
+          "relay_refresh",
+          "open_mesh_relay_refresh"
+        ]
+      }
+    }
+  }
+}

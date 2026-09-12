@@ -1,0 +1,38 @@
+#!/bin/sh
+
+. /lib/functions.sh
+
+[ -n "$INTERFACE" ] || exit 0
+case "$ACTION" in ifup|ifupdate|ifdown) ;; *) exit 0 ;; esac
+
+config_load agent
+config_get_bool enabled main public_ipv6_enabled 1
+config_get mode main public_ipv6_mode auto
+[ "$enabled" -eq 1 ] || exit 0
+case "$mode" in auto|upstream-relay) ;; *) exit 0 ;; esac
+[ -x /usr/libexec/nexus-agent-public-ipv6 ] || exit 0
+
+lock=/var/lock/nexus-agent-public-ipv6
+mkdir "$lock" 2>/dev/null || exit 0
+trap 'rmdir "$lock" >/dev/null 2>&1' EXIT HUP INT TERM
+
+before=''
+[ ! -s /var/run/nexus-agent-public-ipv6.json ] || \
+	before="$(jsonfilter -i /var/run/nexus-agent-public-ipv6.json -e '@.generation' 2>/dev/null)"
+[ "$ACTION" != ifdown ] || {
+	/etc/init.d/agent-netd stop >/dev/null 2>&1
+	sleep 1
+}
+resolution="$(/usr/libexec/nexus-agent-public-ipv6 resolve 2>/dev/null)" || exit 0
+after="$(printf '%s' "$resolution" | jsonfilter -e '@.generation' 2>/dev/null)"
+ready="$(printf '%s' "$resolution" | jsonfilter -e '@.ready' 2>/dev/null)"
+code="$(printf '%s' "$resolution" | jsonfilter -e '@.code' 2>/dev/null)"
+
+if [ "$before" != "$after" ]; then
+	logger -t agent-public-ipv6 "network state changed on $INTERFACE ($ACTION): $code"
+	/etc/init.d/agent-netd restart >/dev/null 2>&1
+	/etc/init.d/agentd restart >/dev/null 2>&1
+elif [ "$ready" = true ] || [ "$ready" = 1 ]; then
+	ubus -S call agent.netd status >/dev/null 2>&1 || \
+		/etc/init.d/agent-netd restart >/dev/null 2>&1
+fi

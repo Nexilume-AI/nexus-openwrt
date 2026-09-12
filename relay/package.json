@@ -1,0 +1,14 @@
+{
+  "name": "nexus-agent-relayd",
+  "version": "1.3.0",
+  "private": true,
+  "description": "Nexus P6.2.4 HA-capable federated mTLS HTTP/2 Agent Relay",
+  "main": "nexus-relayd.js",
+  "scripts": {
+    "start": "node nexus-relayd.js --config relay.config.example.json",
+    "test": "node ../tests/test_nexus_relayd.js && node ../tests/test_nexus_relayd_http2.js && node ../tests/test_relay_cloud_invoke.js && node ../tests/test_relay_federation.js && node ../tests/test_relay_federation_http2.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

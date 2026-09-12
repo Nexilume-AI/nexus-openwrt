@@ -1,0 +1,99 @@
+#!/bin/sh
+
+set -u
+
+mode="${1:---check}"
+uci_bin="${NEXUS_THEME_UCI_BIN:-uci}"
+argon_css="${NEXUS_THEME_ARGON_CSS:-/www/luci-static/argon/css/cascade.css}"
+argon_header="${NEXUS_THEME_ARGON_HEADER:-/usr/share/ucode/luci/template/themes/argon/header.ut}"
+bootstrap_css="${NEXUS_THEME_BOOTSTRAP_CSS:-/www/luci-static/bootstrap/cascade.css}"
+changed=0
+
+ensure_argon_cache_busting() {
+	[ -s "$argon_header" ] || return 0
+	if grep -q 'luci.js?v={{ version.luciversion }}"' "$argon_header" &&
+	   ! grep -q 'luci.js?v={{ version.luciversion }}-{{ pkgs_update_time }}"' "$argon_header"; then
+		sed -i 's|luci.js?v={{ version.luciversion }}"|luci.js?v={{ version.luciversion }}-{{ pkgs_update_time }}"|' "$argon_header"
+		changed=1
+	fi
+}
+
+get_uci() {
+	"$uci_bin" -q get "$1" 2>/dev/null || true
+}
+
+set_uci() {
+	key="$1"
+	value="$2"
+	[ "$(get_uci "$key")" = "$value" ] && return 0
+	"$uci_bin" -q set "$key=$value"
+	changed=1
+}
+
+argon_ready() {
+	[ -s "$argon_css" ] && [ -s "$argon_header" ]
+}
+
+bootstrap_ready() {
+	[ -s "$bootstrap_css" ]
+}
+
+select_bootstrap() {
+	if ! bootstrap_ready; then
+		logger -t nexus-theme-guard 'Bootstrap fallback asset is unavailable'
+		return 1
+	fi
+	set_uci luci.themes.Bootstrap /luci-static/bootstrap
+	set_uci luci.main.mediaurlbase /luci-static/bootstrap
+}
+
+if bootstrap_ready; then
+	set_uci luci.themes.Bootstrap /luci-static/bootstrap
+fi
+
+if argon_ready; then
+	set_uci luci.themes.Argon /luci-static/argon
+	ensure_argon_cache_busting
+fi
+
+current="$(get_uci luci.main.mediaurlbase)"
+case "$mode" in
+	--install)
+		if argon_ready; then
+			case "$current" in
+				''|/luci-static/bootstrap|/luci-static/bootstrap-dark|/luci-static/bootstrap-light)
+					set_uci luci.main.mediaurlbase /luci-static/argon
+					;;
+			esac
+		elif [ "$current" = '/luci-static/argon' ] || [ -z "$current" ]; then
+			select_bootstrap || exit 1
+		fi
+		;;
+	--check)
+		if [ "$current" = '/luci-static/argon' ] && ! argon_ready; then
+			logger -t nexus-theme-guard 'Argon assets are incomplete; restoring Bootstrap'
+			select_bootstrap || exit 1
+		elif [ -z "$current" ]; then
+			if argon_ready; then
+				set_uci luci.main.mediaurlbase /luci-static/argon
+			else
+				select_bootstrap || exit 1
+			fi
+		fi
+		;;
+	--fallback)
+		select_bootstrap || exit 1
+		;;
+	*)
+		echo "Usage: nexus-theme-guard [--install|--check|--fallback]" >&2
+		exit 2
+		;;
+esac
+
+if [ "$changed" -eq 1 ]; then
+	"$uci_bin" -q commit luci
+	find /tmp -maxdepth 1 -type f -name 'luci-indexcache*' -delete 2>/dev/null || true
+	find /tmp -maxdepth 1 -type d -name 'luci-modulecache*' -exec rm -rf '{}' + 2>/dev/null || true
+fi
+
+exit 0

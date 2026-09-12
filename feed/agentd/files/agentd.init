@@ -1,0 +1,534 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=95
+STOP=10
+
+loopback_udp4_port_listening() {
+	local port_hex
+
+	[ -r /proc/net/udp ] || return 1
+	port_hex="$(printf '%04X' "$1" 2>/dev/null)" || return 1
+	awk -v wanted="$port_hex" '
+		NR > 1 {
+			split($2, local_address, ":")
+			address = toupper(local_address[1])
+			port = toupper(local_address[2])
+			if ((address == "00000000" || address == "0100007F") &&
+			    port == wanted) found = 1
+		}
+		END { exit found ? 0 : 1 }
+	' /proc/net/udp
+}
+
+detect_cross_resolver_port() {
+	local candidate unbound_port dnsmasq_port dnsmasq_dnssec seen
+
+	unbound_port="$(uci -q get 'unbound.@unbound[0].listen_port')"
+	if pidof unbound >/dev/null 2>&1; then
+		[ -n "$unbound_port" ] || unbound_port=53
+	else
+		unbound_port=''
+	fi
+	dnsmasq_port="$(uci -q get 'dhcp.@dnsmasq[0].port')"
+	dnsmasq_dnssec="$(uci -q get 'dhcp.@dnsmasq[0].dnssec')"
+	[ -n "$dnsmasq_port" ] || dnsmasq_port=53
+
+	# A dedicated validating Unbound commonly listens on 1053 behind
+	# dnsmasq. Prefer its configured port, then the packaged default. Only
+	# consider dnsmasq when its DNSSEC validator is explicitly enabled.
+	for candidate in "$unbound_port" 1053; do
+		case "$candidate" in
+			''|*[!0-9]*|0) continue ;;
+		esac
+		[ "$candidate" -le 65535 ] 2>/dev/null || continue
+		case " $seen " in *" $candidate "*) continue ;; esac
+		seen="$seen $candidate"
+		if loopback_udp4_port_listening "$candidate"; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+	done
+
+	case "$dnsmasq_dnssec" in 1|on|true|yes|enabled) ;; *) return 1 ;; esac
+	case "$dnsmasq_port" in ''|*[!0-9]*|0) return 1 ;; esac
+	[ "$dnsmasq_port" -le 65535 ] 2>/dev/null || return 1
+	loopback_udp4_port_listening "$dnsmasq_port" || return 1
+	printf '%s\n' "$dnsmasq_port"
+}
+
+open_mesh_router_id() {
+	local address suffix
+
+	address="$(cat /sys/class/net/br-lan/address 2>/dev/null)"
+	[ -n "$address" ] || address="$(cat /sys/class/net/eth0/address 2>/dev/null)"
+	suffix="$(printf '%s' "$address" | tr -d ':\r\n' | tr 'A-F' 'a-f')"
+	case "$suffix" in
+		????????????) printf 'router-%s\n' "$suffix"; return 0 ;;
+	esac
+	return 1
+}
+
+prepare_open_mesh_identity() {
+	local router_id="$1" domain_id="$2" ca_file="$3" cert_file="$4" key_file="$5"
+	local temporary_cert temporary_key common_name
+
+	if [ -s "$ca_file" ] && [ -s "$cert_file" ] && [ -s "$key_file" ]; then
+		return 0
+	fi
+	if [ -e "$ca_file" ] || [ -e "$cert_file" ] || [ -e "$key_file" ]; then
+		logger -t agentd 'Open Mesh identity is incomplete; refusing to overwrite existing TLS material'
+		return 1
+	fi
+	command -v openssl >/dev/null 2>&1 || {
+		logger -t agentd 'Open Mesh requires openssl-util to create the local device identity'
+		return 1
+	}
+	mkdir -p "$(dirname "$cert_file")" || return 1
+	temporary_cert="${cert_file}.mesh-new.$$"
+	temporary_key="${key_file}.mesh-new.$$"
+	common_name="${router_id}.${domain_id}"
+	umask 077
+	openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
+		-keyout "$temporary_key" -out "$temporary_cert" \
+		-subj "/CN=$common_name" \
+		-addext "subjectAltName=DNS:$common_name,DNS:${router_id}.local" \
+		-addext 'extendedKeyUsage=serverAuth,clientAuth' >/dev/null 2>&1 || {
+		rm -f "$temporary_cert" "$temporary_key"
+		logger -t agentd 'Open Mesh device identity generation failed'
+		return 1
+	}
+	mv "$temporary_key" "$key_file" || return 1
+	mv "$temporary_cert" "$cert_file" || return 1
+	cp "$cert_file" "$ca_file" || return 1
+	chmod 0600 "$key_file"
+	chmod 0644 "$cert_file" "$ca_file"
+}
+
+start_service() {
+	local enabled max_routes default_lease min_lease max_lease
+	local prune_interval ipc_socket ipc_allowed_uid jail
+	local peer_transport_enabled router_id domain_id peer_ca_file router_mesh_mode
+	local peer_listener_enabled reflector_enabled peer_listen_ipv4 peer_listen_port
+	local peer_max_inbound
+	local discovery_enabled discovery_publish_enabled discovery_poll
+	local discovery_max_candidates
+	local discovery_ttl_cap
+	local lan_auto_promotion_mode lan_auto_promotion_allowlist
+	local lan_auto_promotion_grace
+	local cross_discovery_enabled cross_discovery_domain
+	local cross_resolver_mode cross_resolver_ipv4 cross_resolver_port
+	local cross_resolver_detected
+	local detected_cross_resolver_port cross_poll cross_timeout
+	local cross_max_candidates cross_ttl_cap
+	local card_authorization_mode card_authorization_allowlist card_authorization_spec
+	local relay_enabled relay_directory_endpoint relay_directory_connect_ipv4
+	local relay_directory_endpoints relay_directory_connect_ipv4s
+	local relay_directory_device_token_file relay_directory_ca_file
+	local relay_poll relay_timeout
+	local open_mesh_relay_enabled open_mesh_directory_endpoints
+	local open_mesh_directory_connect_ipv4s open_mesh_poll open_mesh_timeout
+	local relay_tunnel_enabled
+	local relay_config_generation
+	local relay_gateway_internal_enabled relay_gateway_internal_endpoint
+	local relay_gateway_token_file
+	local forwarding_assertion_required forwarding_public_key
+	local forwarding_key_id forwarding_issuer forwarding_source_router_id
+	local peer_client_cert peer_client_key peer_heartbeat peer_connect_timeout
+	local peer_open_timeout peer_miss_limit peer_initial_backoff
+	local peer_max_backoff peer_tick
+	local public_ipv6_enabled public_ipv6_mode public_ipv6_prefix
+	local public_ipv6_max_addresses public_ipv6_effective_mode
+	local public_ipv6_resolution public_ipv6_ready public_ipv6_code
+
+	config_load agent
+	config_get_bool enabled main enabled 1
+	[ "$enabled" -eq 1 ] || return 0
+
+	config_get max_routes main max_routes 10000
+	config_get default_lease main default_lease_seconds 30
+	config_get min_lease main min_lease_seconds 5
+	config_get max_lease main max_lease_seconds 3600
+	config_get prune_interval main prune_interval_ms 1000
+	config_get ipc_socket main ipc_socket /var/run/agentd/lookup.sock
+	config_get ipc_allowed_uid main ipc_allowed_uid 454
+	config_get_bool jail main jail 1
+	config_get_bool public_ipv6_enabled main public_ipv6_enabled 1
+	config_get public_ipv6_mode main public_ipv6_mode auto
+	config_get public_ipv6_prefix main public_ipv6_prefix ''
+	config_get public_ipv6_max_addresses main public_ipv6_max_addresses 256
+	public_ipv6_effective_mode=routed-prefix
+	case "$public_ipv6_mode" in
+		auto|routed-prefix|upstream-relay) ;;
+		*) logger -t agentd "invalid public IPv6 mode: $public_ipv6_mode"; return 1 ;;
+	esac
+	if [ "$public_ipv6_enabled" -eq 1 ]; then
+		[ -x /usr/libexec/nexus-agent-public-ipv6 ] || {
+			logger -t agentd "public IPv6 resolver is missing"
+			return 1
+		}
+		public_ipv6_resolution="$(/usr/libexec/nexus-agent-public-ipv6 resolve)" || return 1
+		public_ipv6_ready="$(printf '%s' "$public_ipv6_resolution" | jsonfilter -e '@.ready' 2>/dev/null)"
+		public_ipv6_code="$(printf '%s' "$public_ipv6_resolution" | jsonfilter -e '@.code' 2>/dev/null)"
+		if [ "$public_ipv6_ready" = true ] || [ "$public_ipv6_ready" = 1 ]; then
+			public_ipv6_prefix="$(printf '%s' "$public_ipv6_resolution" | jsonfilter -e '@.prefix' 2>/dev/null)"
+			public_ipv6_effective_mode="$(printf '%s' "$public_ipv6_resolution" | jsonfilter -e '@.effective_mode' 2>/dev/null)"
+		else
+			public_ipv6_prefix=''
+			logger -t agentd "public IPv6 is waiting: $public_ipv6_code"
+		fi
+	fi
+	config_get_bool peer_transport_enabled main peer_transport_enabled 0
+	config_get_bool peer_listener_enabled main peer_listener_enabled 0
+	config_get_bool reflector_enabled main reflector_enabled 0
+	config_get peer_listen_ipv4 main peer_listen_ipv4 0.0.0.0
+	config_get peer_listen_port main peer_listen_port 7444
+	config_get peer_max_inbound main peer_max_inbound 8
+	config_get router_id main router_id router-local
+	config_get domain_id main domain_id local.invalid
+	config_get router_mesh_mode main router_mesh_mode open
+	case "$router_mesh_mode" in
+		open)
+			peer_transport_enabled=1
+			peer_listener_enabled=1
+			discovery_enabled=1
+			discovery_publish_enabled=1
+			lan_auto_promotion_mode=all
+			[ "$router_id" != router-local ] || \
+				router_id="$(open_mesh_router_id)" || return 1
+			;;
+		off) ;;
+		*) logger -t agentd "invalid Router Mesh mode: $router_mesh_mode"; return 1 ;;
+	esac
+	config_get peer_ca_file main peer_ca_file /etc/agentd/tls/peer-ca.crt
+	config_get peer_client_cert main peer_client_cert /etc/agentd/tls/router.crt
+	config_get peer_client_key main peer_client_key /etc/agentd/tls/router.key
+	config_get peer_heartbeat main peer_heartbeat_ms 5000
+	config_get peer_connect_timeout main peer_connect_timeout_ms 5000
+	config_get peer_open_timeout main peer_open_timeout_ms 5000
+	config_get peer_miss_limit main peer_heartbeat_miss_limit 3
+	config_get peer_initial_backoff main peer_initial_backoff_ms 250
+	config_get peer_max_backoff main peer_max_backoff_ms 30000
+	config_get peer_tick main peer_tick_ms 100
+	config_get_bool discovery_enabled main discovery_enabled 0
+	config_get_bool discovery_publish_enabled main discovery_publish_enabled 0
+	config_get discovery_poll main discovery_poll_ms 5000
+	config_get discovery_max_candidates main discovery_max_candidates 64
+	config_get discovery_ttl_cap main discovery_ttl_cap_seconds 120
+	config_get lan_auto_promotion_mode main lan_auto_promotion_mode off
+	config_get lan_auto_promotion_allowlist main \
+		lan_auto_promotion_allowlist ''
+	config_get lan_auto_promotion_grace main \
+		lan_auto_promotion_grace_seconds 30
+	if [ "$router_mesh_mode" = open ]; then
+		peer_transport_enabled=1
+		peer_listener_enabled=1
+		discovery_enabled=1
+		discovery_publish_enabled=1
+		lan_auto_promotion_mode=all
+		prepare_open_mesh_identity "$router_id" "$domain_id" \
+			"$peer_ca_file" "$peer_client_cert" "$peer_client_key" || return 1
+	fi
+	config_get_bool cross_discovery_enabled main cross_discovery_enabled 0
+	config_get cross_discovery_domain main cross_discovery_domain remote.invalid
+	config_get cross_resolver_mode main cross_discovery_resolver_mode auto
+	config_get cross_resolver_ipv4 main cross_discovery_resolver_ipv4 127.0.0.1
+	config_get cross_resolver_port main cross_discovery_resolver_port 1053
+	cross_resolver_detected=1
+	case "$cross_resolver_mode" in
+		auto)
+			cross_resolver_ipv4=127.0.0.1
+			cross_resolver_detected=0
+			detected_cross_resolver_port="$(detect_cross_resolver_port)"
+			if [ -n "$detected_cross_resolver_port" ]; then
+				cross_resolver_port="$detected_cross_resolver_port"
+				cross_resolver_detected=1
+				logger -t agentd "auto-detected local DNSSEC resolver at 127.0.0.1:$cross_resolver_port"
+			elif [ "$cross_discovery_enabled" -eq 1 ]; then
+				logger -t agentd "no local DNSSEC resolver detected; retaining fail-closed fallback 127.0.0.1:$cross_resolver_port"
+			fi
+			;;
+		manual) ;;
+		*) logger -t agentd "invalid cross-discovery resolver mode: $cross_resolver_mode"; return 1 ;;
+	esac
+	config_get cross_poll main cross_discovery_poll_ms 60000
+	config_get cross_timeout main cross_discovery_timeout_ms 1500
+	config_get cross_max_candidates main cross_discovery_max_candidates 32
+	config_get cross_ttl_cap main cross_discovery_ttl_cap_seconds 300
+	config_get card_authorization_mode main card_authorization_mode off
+	config_get card_authorization_allowlist main card_authorization_allowlist ''
+	card_authorization_spec="$card_authorization_mode"
+	[ "$card_authorization_mode" != "allowlist" ] || \
+		card_authorization_spec="allowlist=$card_authorization_allowlist"
+	config_get_bool relay_enabled main relay_enabled 0
+	config_get relay_directory_endpoint main relay_directory_endpoint \
+		https://directory.invalid:8443/v1/relay-assignment
+	config_get relay_directory_connect_ipv4 main relay_directory_connect_ipv4 \
+		''
+	config_get relay_directory_endpoints main relay_directory_endpoints ''
+	config_get relay_directory_connect_ipv4s main \
+		relay_directory_connect_ipv4s ''
+	if [ -n "$relay_directory_endpoints" ]; then
+		# An explicitly configured plural endpoint set owns its optional pin
+		# set. Keeping the plural pins empty intentionally selects DNS and must
+		# not resurrect a legacy singular pin that the UI no longer displays.
+		:
+	else
+		relay_directory_endpoints="$relay_directory_endpoint"
+		relay_directory_connect_ipv4s="$relay_directory_connect_ipv4"
+	fi
+	config_get relay_poll main relay_directory_poll_ms 60000
+	config_get relay_timeout main relay_directory_timeout_ms 5000
+	config_get relay_directory_device_token_file main \
+		relay_directory_device_token_file ''
+	config_get relay_directory_ca_file main relay_directory_ca_file ''
+	[ -n "$relay_directory_ca_file" ] || relay_directory_ca_file="$peer_ca_file"
+	config_get_bool open_mesh_relay_enabled main open_mesh_relay_enabled 0
+	config_get open_mesh_directory_endpoints main open_mesh_directory_endpoints ''
+	config_get open_mesh_directory_connect_ipv4s main open_mesh_directory_connect_ipv4s ''
+	config_get open_mesh_poll main open_mesh_directory_poll_ms 60000
+	config_get open_mesh_timeout main open_mesh_directory_timeout_ms 5000
+	# Promote only an all-Open-Mesh legacy endpoint set in memory.
+	if [ "$open_mesh_relay_enabled" -eq 0 ] && [ -z "$open_mesh_directory_endpoints" ]; then
+		case "$relay_directory_endpoints" in
+			*'/v1/open-mesh/assignment'*)
+				case "$relay_directory_endpoints" in
+					*'/v1/relay-assignment'*|*'/api/v1/'*) ;;
+					*) open_mesh_relay_enabled=1; open_mesh_directory_endpoints="$relay_directory_endpoints"; open_mesh_directory_connect_ipv4s="$relay_directory_connect_ipv4s"; relay_enabled=0 ;;
+				esac ;;
+		esac
+	fi
+	if [ "$open_mesh_relay_enabled" -eq 1 ] && [ -z "$open_mesh_directory_endpoints" ]; then
+		logger -t agentd "Open Mesh Relay is enabled without a Directory seed"
+		return 1
+	fi
+	config_get_bool relay_tunnel_enabled main relay_tunnel_enabled 0
+	# Cloud may disable its own Relay without disabling a self-hosted Open Mesh tunnel.
+	[ "$open_mesh_relay_enabled" -ne 1 ] || relay_tunnel_enabled=1
+	[ "$router_mesh_mode" != open ] || relay_tunnel_enabled=1
+	config_get relay_config_generation main relay_config_generation ''
+	if [ -n "$relay_config_generation" ]; then
+		case "$relay_config_generation" in
+			????????????????????????????????????????????????????????????????) ;;
+			*) logger -t agentd "invalid Relay configuration generation"; return 1 ;;
+		esac
+		case "$relay_config_generation" in
+			*[!0-9a-f]*) logger -t agentd "invalid Relay configuration generation"; return 1 ;;
+		esac
+	fi
+	config_get_bool forwarding_assertion_required main \
+		forwarding_assertion_required 0
+	config_get_bool relay_gateway_internal_enabled main \
+		relay_gateway_internal_enabled 0
+	config_get relay_gateway_internal_endpoint main \
+		relay_gateway_internal_endpoint \
+		http://127.0.0.1:7788/agent/v1/internal-invoke
+	config_get relay_gateway_token_file main relay_gateway_token_file \
+		/etc/agentd/nexus-cloud-gateway.token
+	case "$relay_gateway_internal_endpoint" in
+		http://127.0.0.1:*/agent/v1/internal-invoke) ;;
+		*) logger -t agentd "invalid internal Gateway endpoint"; return 1 ;;
+	esac
+	case "$relay_gateway_token_file" in
+		/etc/agentd/nexus-cloud-gateway.token) ;;
+		*) logger -t agentd "invalid internal Gateway credential path"; return 1 ;;
+	esac
+	if [ "$relay_gateway_internal_enabled" -eq 1 ]; then
+		[ "$relay_tunnel_enabled" -eq 1 ] &&
+			[ "$forwarding_assertion_required" -eq 1 ] &&
+			[ -f "$relay_gateway_token_file" ] &&
+			[ ! -L "$relay_gateway_token_file" ] || return 1
+	fi
+	config_get forwarding_public_key main forwarding_public_key \
+		/etc/agentd/forwarding-public.pem
+	config_get forwarding_key_id main forwarding_key_id router-default
+	config_get forwarding_issuer main forwarding_issuer router-source
+	config_get forwarding_source_router_id main forwarding_source_router_id ''
+	[ -n "$forwarding_source_router_id" ] || \
+		forwarding_source_router_id="$forwarding_issuer"
+
+	# Keep the socket in the host-visible runtime directory. Both jailed and
+	# non-jailed gateway instances consume this same path.
+	mkdir -p /var/run/agentd
+	chown agentd:agentd /var/run/agentd
+	mkdir -p /var/run/agent-manifests
+	chown agentd:agentd /var/run/agent-manifests
+	chmod 0755 /var/run/agent-manifests
+
+	procd_open_instance
+	procd_set_param env NEXUS_CROSS_RESOLVER_DETECTED="$cross_resolver_detected"
+	procd_append_param env NEXUS_RELAY_CONFIG_GENERATION="$relay_config_generation"
+	procd_append_param env NEXUS_RELAY_DIRECTORY_CA_FILE="$relay_directory_ca_file"
+	procd_append_param env NEXUS_RELAY_GATEWAY_INTERNAL_ENABLED="$relay_gateway_internal_enabled"
+	procd_append_param env NEXUS_RELAY_GATEWAY_INTERNAL_ENDPOINT="$relay_gateway_internal_endpoint"
+	procd_append_param env NEXUS_RELAY_GATEWAY_TOKEN_FILE="$relay_gateway_token_file"
+	procd_append_param env NEXUS_OPEN_MESH_RELAY_ENABLED="$open_mesh_relay_enabled"
+	procd_append_param env NEXUS_OPEN_MESH_DIRECTORY_ENDPOINTS="$open_mesh_directory_endpoints"
+	procd_append_param env NEXUS_OPEN_MESH_DIRECTORY_CONNECT_IPV4S="$open_mesh_directory_connect_ipv4s"
+	procd_append_param env NEXUS_OPEN_MESH_DIRECTORY_POLL_MS="$open_mesh_poll"
+	procd_append_param env NEXUS_OPEN_MESH_DIRECTORY_TIMEOUT_MS="$open_mesh_timeout"
+	[ -z "$relay_directory_device_token_file" ] || \
+		procd_append_param env NEXUS_RELAY_DEVICE_TOKEN_FILE="$relay_directory_device_token_file"
+	procd_set_param command /usr/sbin/agentd
+	procd_append_param command -m "$max_routes"
+	procd_append_param command -d "$default_lease"
+	procd_append_param command -l "$min_lease"
+	procd_append_param command -L "$max_lease"
+	procd_append_param command -p "$prune_interval"
+	procd_append_param command -s "$ipc_socket"
+	procd_append_param command -u "$ipc_allowed_uid"
+	[ "$public_ipv6_enabled" -ne 1 ] || [ -z "$public_ipv6_prefix" ] || \
+		procd_append_param command -6 "$public_ipv6_prefix"
+	procd_append_param command -7 "$public_ipv6_max_addresses"
+	[ "$public_ipv6_effective_mode" = upstream-relay ] && \
+		procd_append_param command -8 1 || \
+		procd_append_param command -8 0
+	procd_append_param command -T "$peer_transport_enabled"
+	[ "$router_mesh_mode" = open ] && \
+		procd_append_param command -0 1 || \
+		procd_append_param command -0 0
+	procd_append_param command -I "$peer_listener_enabled"
+	procd_append_param command -F "$reflector_enabled"
+	procd_append_param command -A "$peer_listen_ipv4"
+	procd_append_param command -P "$peer_listen_port"
+	procd_append_param command -N "$peer_max_inbound"
+	procd_append_param command -R "$router_id"
+	procd_append_param command -D "$domain_id"
+	procd_append_param command -C "$peer_ca_file"
+	procd_append_param command -X "$peer_client_cert"
+	procd_append_param command -K "$peer_client_key"
+	procd_append_param command -H "$peer_heartbeat"
+	procd_append_param command -c "$peer_connect_timeout"
+	procd_append_param command -o "$peer_open_timeout"
+	procd_append_param command -M "$peer_miss_limit"
+	procd_append_param command -b "$peer_initial_backoff"
+	procd_append_param command -B "$peer_max_backoff"
+	procd_append_param command -t "$peer_tick"
+	procd_append_param command -Q "$discovery_enabled"
+	procd_append_param command -q "$discovery_poll"
+	procd_append_param command -n "$discovery_max_candidates"
+	procd_append_param command -e "$discovery_ttl_cap"
+	procd_append_param command -O "$lan_auto_promotion_mode"
+	# procd/ujail may drop an empty argv entry and make -W consume -k as its
+	# value. Omit the optional allowlist pair when it is empty; agentd already
+	# defaults to an empty allowlist.
+	[ -z "$lan_auto_promotion_allowlist" ] || \
+		procd_append_param command -W "$lan_auto_promotion_allowlist"
+	procd_append_param command -k "$lan_auto_promotion_grace"
+	procd_append_param command -G "$cross_discovery_enabled"
+	procd_append_param command -g "$cross_discovery_domain"
+	procd_append_param command -V "$cross_resolver_ipv4"
+	procd_append_param command -v "$cross_resolver_port"
+	procd_append_param command -J "$cross_poll"
+	procd_append_param command -j "$cross_timeout"
+	procd_append_param command -Y "$cross_max_candidates"
+	procd_append_param command -y "$cross_ttl_cap"
+	procd_append_param command -S "$card_authorization_spec"
+	procd_append_param command -r "$relay_enabled"
+	procd_append_param command -E "$relay_directory_endpoints"
+	# An empty pin set selects the daemon's DNS default. Do not emit an empty
+	# getopt argument: some procd/ujail versions drop it and make -a consume -w.
+	[ -z "$relay_directory_connect_ipv4s" ] || \
+		procd_append_param command -a "$relay_directory_connect_ipv4s"
+	procd_append_param command -w "$relay_poll"
+	procd_append_param command -x "$relay_timeout"
+	procd_append_param command -z "$relay_tunnel_enabled"
+	procd_append_param command -f "$forwarding_assertion_required"
+	procd_append_param command -U "$forwarding_public_key"
+	procd_append_param command -Z "$forwarding_key_id"
+	procd_append_param command -i "$forwarding_issuer"
+	procd_append_param command -9 "$forwarding_source_router_id"
+	# ubusd on OpenWrt 25.12 requires UID 0 to publish a global object.
+	# Keep the dedicated group for the 0660 IPC socket and confine the
+	# process with a read-only ujail and an explicit mount allow-list below.
+	procd_set_param group agentd
+	procd_set_param respawn 3600 5 5
+	procd_set_param limits core="0 0" nofile="1024 1024"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file /etc/config/agent
+	procd_set_param file /etc/config/agent_peers
+	procd_set_param file /etc/config/agent_policy
+
+	# umdns consumes the procd service data tree. Only non-sensitive routing
+	# identity and the fixed ARPX registration path are announced.
+	if [ "$discovery_publish_enabled" -eq 1 ] && \
+		[ "$peer_listener_enabled" -eq 1 ]; then
+		procd_open_data
+		json_add_object mdns
+		json_add_object agent_router
+		json_add_string instance "$router_id"
+		json_add_string hostname "${router_id}.local"
+		json_add_string service "_agent-router._tcp.local"
+		json_add_int port "$peer_listen_port"
+		json_add_array txt
+		json_add_string "" "ver=1"
+		json_add_string "" "router=$router_id"
+		json_add_string "" "domain=$domain_id"
+		json_add_string "" "path=/arpx/v1"
+		json_close_array
+		json_close_object
+		json_close_object
+		procd_close_data
+	fi
+	if [ "$peer_transport_enabled" -eq 1 ] || \
+		[ "$peer_listener_enabled" -eq 1 ]; then
+		procd_set_param file "$peer_ca_file" "$peer_client_cert" \
+			"$peer_client_key"
+	fi
+	if [ "$relay_enabled" -eq 1 ] && \
+		[ "$relay_directory_ca_file" != "$peer_ca_file" ]; then
+		procd_append_param file "$relay_directory_ca_file"
+	fi
+	if [ "$forwarding_assertion_required" -eq 1 ]; then
+		procd_append_param file "$forwarding_public_key"
+	fi
+	[ -z "$relay_directory_device_token_file" ] || \
+		procd_append_param file "$relay_directory_device_token_file"
+	if [ "$relay_gateway_internal_enabled" -eq 1 ]; then
+		procd_append_param file "$relay_gateway_token_file"
+	fi
+
+	if [ "$jail" -eq 1 ]; then
+		procd_add_jail agentd log ubus procfs ronly requirejail
+		# libuci opens and scans its configuration directory. Mounting only the
+		# package file leaves /etc/config unavailable inside the jail on target.
+		procd_add_jail_mount /etc/config
+		if [ "$peer_transport_enabled" -eq 1 ] || \
+			[ "$peer_listener_enabled" -eq 1 ]; then
+			procd_add_jail_mount "$peer_ca_file" "$peer_client_cert" \
+				"$peer_client_key"
+		fi
+		if [ "$relay_enabled" -eq 1 ] && \
+			[ "$relay_directory_ca_file" != "$peer_ca_file" ]; then
+			procd_add_jail_mount "$relay_directory_ca_file"
+		fi
+		if [ "$forwarding_assertion_required" -eq 1 ]; then
+			procd_add_jail_mount "$forwarding_public_key"
+		fi
+		[ -z "$relay_directory_device_token_file" ] || \
+			procd_add_jail_mount "$relay_directory_device_token_file"
+		if [ "$relay_gateway_internal_enabled" -eq 1 ]; then
+			procd_add_jail_mount "$relay_gateway_token_file"
+		fi
+		procd_add_jail_mount_rw /var/run/agentd
+		procd_add_jail_mount_rw /var/run/agent-manifests
+		[ ! -d /var/run/nexus-agent-cloud ] ||
+			procd_add_jail_mount /var/run/nexus-agent-cloud
+	fi
+
+	procd_close_instance
+}
+
+reload_service() {
+	# agentd reads routing, discovery, peer, and policy state at startup.
+	# Recreate the procd instance after an atomic LuCI/UCI apply.
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger agent
+	procd_add_reload_trigger agent_peers
+	procd_add_reload_trigger agent_policy
+}

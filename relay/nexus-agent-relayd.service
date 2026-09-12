@@ -1,0 +1,31 @@
+[Unit]
+Description=Nexus Agent Relay (P6.2.3 Federation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nexus-relay
+Group=nexus-relay
+WorkingDirectory=/opt/nexus-relay
+ExecStart=/usr/bin/node /opt/nexus-relay/nexus-relayd.js --config /etc/nexus-relay/relay.json
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+StateDirectory=nexus-relay
+ReadOnlyPaths=/etc/nexus-relay
+ReadWritePaths=/var/lib/nexus-relay
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

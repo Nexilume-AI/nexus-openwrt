@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "profile": "router-seed",
+  "cloud_relay_client": true,
+  "self_hosted_relay": true,
+  "directory": true
+}

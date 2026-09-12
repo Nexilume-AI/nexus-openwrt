@@ -1,0 +1,16 @@
+#!/bin/sh
+
+while :; do
+	/usr/sbin/agent-jwks-update ||
+		logger -t agent-jwks "refresh attempt failed; retaining last valid cache"
+
+	interval="$(uci -q get agent_gateway.main.jwt_jwks_refresh_seconds || true)"
+	case "$interval" in
+		''|*[!0-9]*) interval=300 ;;
+	esac
+	if [ "$interval" -lt 60 ] || [ "$interval" -gt 86400 ]; then
+		interval=300
+	fi
+	sleep "$interval" &
+	wait "$!"
+done

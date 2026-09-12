@@ -1,0 +1,14 @@
+# Nexus external dependency lock. This file is sourced by
+# scripts/build-argon-theme-sdk.sh; keep values shell-literal and single-line.
+ARGON_NAME='luci-theme-argon'
+ARGON_REPOSITORY='https://github.com/jerrykuku/luci-theme-argon'
+ARGON_TAG='v2.4.6'
+ARGON_SOURCE_URL='https://github.com/jerrykuku/luci-theme-argon/archive/refs/tags/v2.4.6.tar.gz'
+ARGON_SOURCE_SHA256='282f0db85eb5659c54f91f776617d0db9a068e9a89865c3f4aacbb97f05c85bd'
+ARGON_SOURCE_DIR='luci-theme-argon-2.4.6'
+ARGON_UPSTREAM_PKG_VERSION='2.4.5'
+ARGON_UPSTREAM_PKG_RELEASE='20260718'
+ARGON_PACKAGE_VERSION='2.4.6'
+ARGON_PACKAGE_RELEASE='1'
+ARGON_LICENSE='Apache-2.0'
+ARGON_CONFIG_APP='disabled'

@@ -1,0 +1,224 @@
+#!/bin/sh
+
+IPKG_INSTROOT="${IPKG_INSTROOT:-}"
+
+. /lib/functions.sh
+. /usr/share/libubox/jshn.sh
+
+RUNTIME_DIR=/var/run/nexus-cloud
+PASSED=0
+WARNED=0
+FAILED=0
+
+add_check() {
+	local id="$1" state="$2" label="$3" message="$4"
+	json_add_object ''
+	json_add_string id "$id"
+	json_add_string state "$state"
+	json_add_string label "$label"
+	json_add_string message "$message"
+	json_close_object
+	case "$state" in
+		pass) PASSED=$((PASSED + 1)) ;;
+		warn) WARNED=$((WARNED + 1)) ;;
+		*) FAILED=$((FAILED + 1)) ;;
+	esac
+}
+
+file_mode() {
+	local target="$1" symbolic
+	if command -v stat >/dev/null 2>&1; then
+		stat -c %a "$target" 2>/dev/null && return 0
+	fi
+	symbolic="$(LC_ALL=C ls -ld "$target" 2>/dev/null | cut -c1-10)"
+	case "$symbolic" in
+		-rw-------) printf 600 ;;
+		-r--------) printf 400 ;;
+		*) printf unknown ;;
+	esac
+}
+
+config_load nexus_cloud
+config_get base_url main base_url ''
+config_get enrollment_url main enrollment_url ''
+config_get ca_file main ca_file /etc/ssl/certs/ca-certificates.crt
+config_get client_cert main client_cert /etc/nexus-cloud/device.crt
+config_get client_key main client_key /etc/nexus-cloud/device.key
+config_get identity_mode main identity_mode managed
+config_get pairing_code main pairing_code ''
+config_get token_file main token_file /etc/nexus-cloud/device.token
+config_get node_id_file main node_id_file /etc/nexus-cloud/node.id
+config_get connectivity_mode main connectivity_mode auto
+base_url="${base_url%/}"
+enrollment_url="${enrollment_url%/}"
+[ -n "$enrollment_url" ] || enrollment_url="$base_url"
+mkdir -p "$RUNTIME_DIR"
+umask 077
+
+AUTH_HTTP_CODE=''
+AUTH_ERROR_CODE=''
+RELAY_AVAILABLE=''
+if [ -s "$token_file" ] && [ -r "$ca_file" ]; then
+	probe_config=$RUNTIME_DIR/check-cloud-identity.$$.conf
+	probe_response=$RUNTIME_DIR/check-cloud-identity.$$.json
+	token="$(cat "$token_file" 2>/dev/null || true)"
+	case "$token" in
+		edge_[A-Za-z0-9_-]*)
+			{
+				printf 'silent\nshow-error\nconnect-timeout = "10"\nmax-time = "20"\n'
+				printf 'request = "GET"\nurl = "%s/api/v1/edge/v1/relay-configuration/"\n' "$base_url"
+				printf 'output = "%s"\nwrite-out = "%%{http_code}"\n' "$probe_response"
+				printf 'cacert = "%s"\nheader = "Authorization: Edge %s"\n' "$ca_file" "$token"
+				if [ -s "$client_cert" ] && [ -s "$client_key" ]; then
+					printf 'cert = "%s"\nkey = "%s"\n' "$client_cert" "$client_key"
+				fi
+			} >"$probe_config"
+			chmod 0600 "$probe_config"
+			AUTH_HTTP_CODE="$(curl --config "$probe_config" 2>/dev/null || true)"
+			content="$(cat "$probe_response" 2>/dev/null || true)"
+			if json_load "$content" >/dev/null 2>&1 && json_select error >/dev/null 2>&1; then
+				json_get_var AUTH_ERROR_CODE code
+			fi
+			case "$AUTH_HTTP_CODE:$AUTH_ERROR_CODE" in
+				200:*) RELAY_AVAILABLE=1 ;;
+				503:RELAY_NOT_CONFIGURED) RELAY_AVAILABLE=0 ;;
+			esac
+			;;
+		*) AUTH_HTTP_CODE=invalid_token ;;
+	esac
+	rm -f "$probe_config" "$probe_response"
+fi
+
+json_init
+json_add_array checks
+
+case "$base_url" in
+	https://*) add_check configuration pass "Cloud address" "Saved HTTPS address is valid." ;;
+	*) add_check configuration fail "Cloud address" "Save a Nexus Cloud HTTPS address first." ;;
+esac
+
+if [ -r "$ca_file" ]; then
+	add_check cloud_ca pass "Cloud trust" "The configured Cloud CA file is readable."
+else
+	add_check cloud_ca fail "Cloud trust" "The configured Cloud CA file is not readable."
+fi
+
+if [ -s "$token_file" ] && [ -n "$pairing_code" ]; then
+	add_check identity_state warn "Cloud registration" "A new one-time pairing code will replace the existing Cloud identity when the connector restarts."
+elif [ -s "$token_file" ]; then
+	add_check identity_state pass "Cloud registration" "A local Cloud device credential is installed."
+elif [ -n "$pairing_code" ]; then
+	add_check identity_state pass "Cloud registration" "A one-time pairing code is ready for first enrollment."
+else
+	add_check identity_state warn "Cloud registration" "No device credential or one-time pairing code is configured."
+fi
+if [ -s "$token_file" ] && [ ! -s "$node_id_file" ]; then
+	add_check identity_files fail "Cloud identity files" "The device credential exists but its Cloud Router ID file is missing. Re-pair this Router."
+elif [ ! -s "$token_file" ] && [ -s "$node_id_file" ]; then
+	add_check identity_files fail "Cloud identity files" "The Cloud Router ID exists without a device credential. Re-pair this Router."
+else
+	add_check identity_files pass "Cloud identity files" "The local credential and Router ID state are consistent."
+fi
+
+case "$AUTH_HTTP_CODE:$AUTH_ERROR_CODE" in
+	200:*)
+		add_check cloud_identity pass "Cloud identity" "The installed device credential is accepted by Nexus Cloud."
+		add_check relay_capability pass "Cloud Relay" "Nexus Cloud advertises a complete Relay control plane."
+		;;
+	503:RELAY_NOT_CONFIGURED)
+		add_check cloud_identity pass "Cloud identity" "The installed device credential is accepted by Nexus Cloud."
+		if [ "$connectivity_mode" = relay ]; then
+			add_check relay_capability fail "Cloud Relay" "Relay is not configured on Nexus Cloud. Select Direct IPv6 or ask the Cloud administrator to enable Relay."
+		else
+			add_check relay_capability warn "Cloud Relay" "Relay is not configured on Nexus Cloud; Direct IPv6 remains available."
+		fi
+		;;
+	401:*|403:*|invalid_token:*)
+		add_check cloud_identity fail "Cloud identity" "The installed device credential is not accepted by Nexus Cloud. Enter a new one-time pairing code to replace it."
+		;;
+	'':*)
+		add_check cloud_identity warn "Cloud identity" "Cloud identity will be verified after enrollment."
+		;;
+	*)
+		add_check cloud_identity warn "Cloud identity" "The authenticated Cloud identity check could not be completed."
+		;;
+esac
+
+if [ -s "$client_key" ]; then
+	if openssl pkey -in "$client_key" -noout >/dev/null 2>&1; then
+		permissions="$(file_mode "$client_key")"
+		case "$permissions" in 600|400) add_check private_key pass "Device private key" "The local private key is valid and root-only." ;;
+			*) add_check private_key warn "Device private key" "The key is valid, but its permissions should be 600." ;;
+		esac
+	else
+		add_check private_key fail "Device private key" "The configured private key is invalid or encrypted."
+	fi
+elif [ "$identity_mode" = managed ]; then
+	add_check private_key warn "Device private key" "It will be generated locally when pairing starts."
+else
+	add_check private_key fail "Device private key" "Manual identity requires a private key."
+fi
+
+if [ -s "$client_cert" ] && openssl x509 -in "$client_cert" -noout >/dev/null 2>&1; then
+	if openssl x509 -checkend 2592000 -in "$client_cert" -noout >/dev/null 2>&1; then
+		expires="$(openssl x509 -in "$client_cert" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+		add_check certificate pass "Device certificate" "The certificate is valid for more than 30 days (expires $expires)."
+	else
+		add_check certificate warn "Device certificate" "The certificate is expired or expires within 30 days."
+	fi
+	cert_public=$RUNTIME_DIR/check-cert-public.$$
+	key_public=$RUNTIME_DIR/check-key-public.$$
+	if openssl x509 -in "$client_cert" -pubkey -noout >"$cert_public" 2>/dev/null &&
+		openssl pkey -in "$client_key" -pubout >"$key_public" 2>/dev/null && cmp -s "$cert_public" "$key_public"; then
+		add_check key_match pass "Certificate and key" "The certificate matches the local private key."
+	else
+		add_check key_match fail "Certificate and key" "The certificate does not match the configured private key."
+	fi
+	rm -f "$cert_public" "$key_public"
+	if openssl x509 -in "$client_cert" -purpose -noout 2>/dev/null | grep -q '^SSL client : Yes'; then
+		add_check client_auth pass "Client authentication" "The certificate allows TLS client authentication."
+	else
+		add_check client_auth fail "Client authentication" "The certificate is not valid for TLS client authentication."
+	fi
+elif [ "$identity_mode" = managed ]; then
+	add_check certificate warn "Device certificate" "Nexus Cloud will issue it from the local certificate request during pairing."
+else
+	add_check certificate fail "Device certificate" "Manual identity requires a valid PEM certificate."
+fi
+
+if [ "$FAILED" -eq 0 ] && [ -n "$base_url" ] && [ -r "$ca_file" ]; then
+	curl_args="--silent --show-error --connect-timeout 10 --max-time 20 --cacert $ca_file"
+	if [ -s "$client_cert" ] && [ -s "$client_key" ]; then
+		curl_args="$curl_args --cert $client_cert --key $client_key"
+	fi
+	if curl $curl_args --output /dev/null "$base_url/api/v1/health/" >/dev/null 2>&1; then
+		add_check cloud_tls pass "Cloud TLS" "The router can establish a trusted TLS connection to Nexus Cloud."
+	else
+		add_check cloud_tls fail "Cloud TLS" "TLS connection failed. Check DNS, time, Cloud CA, and server certificate name."
+	fi
+	if curl $curl_args "$base_url/api/v1/edge/.well-known/jwks.json" 2>/dev/null | grep -q '"keys"'; then
+		add_check jwks pass "JWT keys" "The Edge JWKS document is reachable through the same trust path."
+	else
+		add_check jwks fail "JWT keys" "The Edge JWKS document could not be downloaded or is invalid."
+	fi
+else
+	add_check cloud_tls warn "Cloud TLS" "Complete the local configuration checks before testing the network."
+	add_check jwks warn "JWT keys" "JWT key download will be tested after Cloud TLS is ready."
+fi
+
+json_close_array
+[ -z "$RELAY_AVAILABLE" ] || json_add_boolean relay_available "$RELAY_AVAILABLE"
+if [ "$FAILED" -gt 0 ]; then
+	json_add_string state fail
+	json_add_string message "Some checks need attention."
+elif [ "$WARNED" -gt 0 ]; then
+	json_add_string state warn
+	json_add_string message "Ready to pair; managed identity will complete the pending checks."
+else
+	json_add_string state pass
+	json_add_string message "Device TLS and JWT trust checks passed."
+fi
+json_add_int passed "$PASSED"
+json_add_int warned "$WARNED"
+json_add_int failed "$FAILED"
+json_dump

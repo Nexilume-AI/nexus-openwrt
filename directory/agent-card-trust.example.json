@@ -1,0 +1,19 @@
+{
+  "directory_id": "directory://nexus.example",
+  "revision": 1,
+  "issued_at_ms": 1785715200000,
+  "expires_at_ms": 1785801600000,
+  "card_keys": [
+    {
+      "router_id": "router-b",
+      "domain_id": "remote.example",
+      "issuer": "directory://nexus.example",
+      "key_id": "router-b-2026-08",
+      "public_key_uri": "https://cards.remote.example/.well-known/router-b-2026-08.pub",
+      "public_key_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "status": "active",
+      "not_before_ms": 1785715200000,
+      "not_after_ms": 1788393600000
+    }
+  ]
+}

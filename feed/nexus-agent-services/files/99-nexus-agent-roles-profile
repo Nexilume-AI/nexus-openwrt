@@ -1,0 +1,21 @@
+#!/bin/sh
+
+# Preserve P7.6 installations while introducing the guided deployment profile.
+uci -q get nexus_roles.main.mode >/dev/null && exit 0
+
+relay_enabled="$(uci -q get nexus_roles.relay.enabled)"
+directory_enabled="$(uci -q get nexus_roles.directory.enabled)"
+mode='node'
+
+if [ "$relay_enabled" = 1 ] && [ "$directory_enabled" = 1 ]; then
+	mode='all'
+elif [ "$relay_enabled" = 1 ]; then
+	mode='node-relay'
+elif [ "$directory_enabled" = 1 ]; then
+	mode='node-directory'
+fi
+
+uci -q set nexus_roles.main=profile
+uci -q set nexus_roles.main.mode="$mode"
+uci -q commit nexus_roles
+exit 0

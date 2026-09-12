@@ -1,0 +1,177 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-agent-router 3.1.0\n"
+"Language: zh_Hans\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "User mode"
+msgstr "用户模式"
+
+msgid "Developer mode"
+msgstr "开发者模式"
+
+msgid "Nexus Agent Network"
+msgstr "Nexus Agent 网络"
+
+msgid "Simple status and one-click controls"
+msgstr "简明状态与一键控制"
+
+msgid "Advanced configuration and diagnostics"
+msgstr "高级配置与诊断"
+
+msgid "Your Router at a glance"
+msgstr "路由器运行概览"
+
+msgid "Connect to Nexus Cloud, discover Neighbor Routers and make Agent capabilities available without configuring addresses or ports."
+msgstr "无需配置地址或端口，即可连接 Nexus Cloud、发现邻居路由器并开放 Agent 功能。"
+
+msgid "Ready"
+msgstr "已就绪"
+
+msgid "Needs attention"
+msgstr "需要处理"
+
+msgid "Offline"
+msgstr "离线"
+
+msgid "Connecting"
+msgstr "正在连接"
+
+msgid "Unavailable"
+msgstr "不可用"
+
+msgid "Applying"
+msgstr "正在应用"
+
+msgid "Operational"
+msgstr "运行正常"
+
+msgid "Nexus Cloud"
+msgstr "Nexus Cloud"
+
+msgid "This Router"
+msgstr "本路由器"
+
+msgid "Neighbor Routers"
+msgstr "邻居路由器"
+
+msgid "Agents"
+msgstr "Agent"
+
+msgid "Network features"
+msgstr "网络功能"
+
+msgid "Simple controls use the Router’s saved secure defaults."
+msgstr "一键控制会使用路由器已保存的安全默认配置。"
+
+msgid "Cloud connection"
+msgstr "Cloud 连接"
+
+msgid "Synchronize eligible Agents with Nexus Cloud."
+msgstr "将符合条件的 Agent 同步到 Nexus Cloud。"
+
+msgid "Router network"
+msgstr "路由器网络"
+
+msgid "Discover Neighbor Routers and exchange Agent capability routes."
+msgstr "发现邻居路由器并交换 Agent 功能路由。"
+
+msgid "Agent services"
+msgstr "Agent 服务"
+
+msgid "Allow zero-configuration SDK registration and Agent invocation."
+msgstr "允许 SDK 零配置注册与 Agent 调用。"
+
+msgid "Pair with Nexus Cloud"
+msgstr "与 Nexus Cloud 配对"
+
+msgid "Pair again"
+msgstr "重新配对"
+
+msgid "One-time pairing code"
+msgstr "一次性配对码"
+
+msgid "Use a one-time code from Nexus Cloud. No address or port is required."
+msgstr "输入 Nexus Cloud 提供的一次性配对码，无需填写地址或端口。"
+
+msgid "This Router has a managed Cloud identity."
+msgstr "本路由器已拥有托管的 Cloud 身份。"
+
+msgid "Cloud profile unavailable"
+msgstr "Cloud 配置档案不可用"
+
+msgid "Update the Router firmware or configure the Cloud address once in Developer mode."
+msgstr "请更新路由器固件，或在开发者模式中配置一次 Cloud 地址。"
+
+msgid "Direct IPv6"
+msgstr "Direct IPv6"
+
+msgid "Cloud Relay"
+msgstr "Cloud Relay"
+
+msgid "Automatic connection"
+msgstr "自动连接"
+
+msgid "Routers discovered by the distributed Agent network."
+msgstr "由分布式 Agent 网络发现的路由器。"
+
+msgid "Agents registered on this Router through the Python SDK."
+msgstr "通过 Python SDK 注册到本路由器的 Agent。"
+
+msgid "Agent capabilities"
+msgstr "Agent 功能"
+
+msgid "Callable functions available through this Router."
+msgstr "可通过本路由器调用的功能。"
+
+msgid "Local"
+msgstr "本地"
+
+msgid "Neighbor"
+msgstr "邻居"
+
+msgid "Cloud"
+msgstr "Cloud"
+
+msgid "Refresh status"
+msgstr "刷新状态"
+
+msgid "Technical details"
+msgstr "技术详情"
+
+msgid "Open Developer mode"
+msgstr "打开开发者模式"
+
+msgid "Read only"
+msgstr "只读"
+
+msgid "Turn off this feature?"
+msgstr "关闭此功能？"
+
+msgid "Advanced settings are preserved and can be used again when the feature is enabled."
+msgstr "高级设置会被保留，重新开启功能后可继续使用。"
+
+msgid "Turn off"
+msgstr "关闭"
+
+msgid "Feature enabled and verified."
+msgstr "功能已开启并验证。"
+
+msgid "Feature disabled."
+msgstr "功能已关闭。"
+
+msgid "Connect this router to an Open Mesh Relay"
+msgstr "将此路由器连接到 Open Mesh Relay"
+
+msgid "A managed seed connects automatically when Router network is enabled. To use a custom OpenWrt Directory seed, keep Node only and configure its assignment URL; the Directory selects the Relay automatically."
+msgstr "启用路由器网络后，托管 Seed 会自动连接。如需使用自定义 OpenWrt Directory Seed，请保持“仅 Node”并配置其分配地址；Directory 会自动选择 Relay。"
+
+msgid "Configure a custom seed"
+msgstr "配置自定义 Seed"
+
+msgid "Open Mesh Relay"
+msgstr "Open Mesh Relay"
+
+msgid "Client connection control. Managed seed values require no editing; enable this only when the saved profile or custom Directory URL is ready. Router Roles is only for hosting Relay or Directory services."
+msgstr "客户端连接控制。托管 Seed 参数无需编辑；仅在已保存配置档案或自定义 Directory 地址就绪后启用。Router Roles 仅用于在本机托管 Relay 或 Directory 服务。"

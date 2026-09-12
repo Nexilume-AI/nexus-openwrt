@@ -1,0 +1,73 @@
+{
+	"luci-app-agent-router": {
+		"description": "Read Nexus Agent routing status",
+		"read": {
+			"ubus": {
+				"nexus-agent-ui": [ "overview" ],
+				"nexus-cloud": [ "check" ],
+				"agent": [
+					"stats", "recovery", "policy", "routes", "agents", "addresses",
+					"neighbors", "discoveries", "cross_discoveries",
+					"promotions", "cards", "card_trust", "relay", "open_mesh_relay"
+				]
+			},
+			"uci": [ "agent", "agent_peers", "agent_policy", "nexus_roles" ]
+		}
+	},
+	"luci-app-agent-router-trust": {
+		"description": "Confirm and revoke Nexus Agent peer trust",
+		"read": {
+			"ubus": {
+				"agent": [
+					"discoveries", "cross_discoveries", "promotions",
+					"cards", "card_trust"
+				]
+			}
+		},
+		"write": {
+			"ubus": {
+				"agent": [
+					"discovery_promote", "discovery_revoke", "card_revoke"
+				]
+			}
+		}
+	},
+	"luci-app-agent-router-configure": {
+		"description": "Configure Nexus Agent routing",
+		"read": {
+			"ubus": {
+				"nexus-agent-ui": [ "overview" ],
+				"nexus-cloud": [ "check" ],
+				"agent": [
+					"stats", "recovery", "policy", "routes", "agents", "addresses",
+					"neighbors", "discoveries", "cross_discoveries",
+					"promotions", "cards", "card_trust", "relay", "open_mesh_relay"
+				],
+				"network.interface": [ "dump" ],
+				"service": [ "list" ],
+				"file": [ "stat" ]
+			},
+			"file": {
+				"/etc/init.d/nexus-relayd": [ "read" ],
+				"/etc/init.d/nexus-directoryd": [ "read" ],
+				"/etc/nexus-relayd/relay.json": [ "read" ],
+				"/etc/nexus-directoryd/directory.json": [ "read" ],
+				"/var/run/nexus-cloud/status.json": [ "read" ]
+			},
+			"uci": [ "agent", "agent_peers", "agent_policy", "nexus_roles", "agent_adapter", "agent_gateway", "nexus_cloud" ]
+		},
+		"write": {
+			"ubus": {
+				"nexus-agent-ui": [ "set_feature", "pair_cloud", "refresh" ],
+				"agent": [
+					"reload", "reload_policy", "reload_peers",
+					"discovery_refresh", "cross_discovery_refresh",
+					"relay_refresh", "open_mesh_relay_refresh", "discovery_promote",
+					"discovery_revoke", "card_revoke"
+				],
+				"uci": [ "add", "apply", "commit", "delete", "order", "rename", "set" ]
+			},
+			"uci": [ "agent", "agent_peers", "agent_policy", "nexus_roles", "agent_adapter", "agent_gateway", "nexus_cloud" ]
+		}
+	}
+}

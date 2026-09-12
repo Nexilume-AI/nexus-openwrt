@@ -1,0 +1,4 @@
+/etc/agentd/
+/etc/config/agent
+/etc/config/agent_peers
+/etc/config/agent_policy

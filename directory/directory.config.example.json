@@ -1,0 +1,54 @@
+{
+  "listen": "0.0.0.0",
+  "port": 8443,
+  "directoryId": "directory-east-1",
+  "tls": {
+    "key": "./tls/directory.key",
+    "cert": "./tls/directory.pem",
+    "ca": "./tls/ca.pem"
+  },
+  "activeTicketKeyId": "p43-current",
+  "ticketKeys": {
+    "p43-current": "GENERATE_SHARED_TICKET_KEY"
+  },
+  "ticketTtlSeconds": 120,
+  "maxConnections": 256,
+  "openMesh": {
+    "enabled": false
+  },
+  "capture": "./directory-events.jsonl",
+  "cardTrust": {
+    "manifest": "./agent-card-trust.json",
+    "signature": "./agent-card-trust.json.sig"
+  },
+  "relays": {
+    "relay-east-1": {
+      "routerId": "router-relay-east-1",
+      "domainId": "relay.nexus.example",
+      "endpoint": "https://relay-east-1.nexus.example:7444/arpx/v1",
+      "connectIpv4": "192.0.2.40"
+    },
+    "relay-west-1": {
+      "routerId": "router-relay-west-1",
+      "domainId": "relay.nexus.example",
+      "endpoint": "https://relay-west-1.nexus.example:7444/arpx/v1",
+      "connectIpv4": "192.0.2.41"
+    }
+  },
+  "identities": {
+    "router-a.example": {
+      "routerId": "router-a",
+      "domainId": "site-a.example",
+      "relayIds": ["relay-east-1", "relay-west-1"],
+      "assignmentId": "assign-router-a-east-1",
+      "leaseSeconds": 300
+    },
+    "router-b.example": {
+      "routerId": "router-b",
+      "domainId": "site-b.example",
+      "relayIds": ["relay-west-1", "relay-east-1"],
+      "assignmentId": "assign-router-b-west-1",
+      "leaseSeconds": 300
+    }
+  }
+}
