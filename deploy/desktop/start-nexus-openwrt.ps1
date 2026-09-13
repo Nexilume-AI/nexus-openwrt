@@ -1,13 +1,15 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [ValidateSet('Start', 'Stop', 'Status', 'Check')][string]$Action = 'Start',
-    [string]$BundleDirectory = $PSScriptRoot,
+    [string]$BundleDirectory = '',
     [string]$InstallationDirectory = (Join-Path $env:LOCALAPPDATA 'Nexus\OpenWrtDesktop'),
     [ValidateRange(512, 16384)][int]$MemoryMiB = 1024,
     [ValidateRange(1, 16)][int]$Processors = 2
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Windows PowerShell 5.1 -File may bind parameter defaults before PSScriptRoot.
+if (-not $BundleDirectory) { $BundleDirectory = $PSScriptRoot }
 
 function Assert-NoLink([string]$Path) {
     $candidate = [IO.Path]::GetFullPath($Path)

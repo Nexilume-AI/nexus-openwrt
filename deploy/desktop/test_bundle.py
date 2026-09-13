@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import shutil
+import os
 import subprocess
 import tempfile
 import unittest
@@ -27,13 +28,20 @@ class BundleTests(unittest.TestCase):
         module.prepare(self.image, self.output)
 
     def check(self):
-        shell = shutil.which('pwsh') or shutil.which('powershell')
+        shell = shutil.which('powershell') or shutil.which('pwsh')
         if not shell:
             self.skipTest('PowerShell is unavailable')
+        env = os.environ.copy()
+        if Path(shell).name.lower() == 'powershell.exe':
+            # Python launched from pwsh otherwise leaks PowerShell 7 module paths
+            # into Windows PowerShell 5.1; let it use its own system modules.
+            for name in list(env):
+                if name.lower() == 'psmodulepath':
+                    del env[name]
         return subprocess.run([shell, '-NoProfile', '-NonInteractive', '-File',
                                str(self.output/'start-nexus-openwrt.ps1'), '-Action', 'Check',
-                               '-BundleDirectory', str(self.output), '-InstallationDirectory', str(self.root/'installation')],
-                              capture_output=True, timeout=30)
+                               '-InstallationDirectory', str(self.root/'installation')],
+                              capture_output=True, timeout=30, env=env)
 
     def test_valid_preflight_has_no_installation_side_effect(self):
         self.prepare()

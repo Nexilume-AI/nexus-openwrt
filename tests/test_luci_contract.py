@@ -157,7 +157,7 @@ def main() -> int:
     require("+luci-base +agentd" in makefile, "LuCI package must depend on the native agentd daemon")
     require("LUCI_PKGARCH:=all" in makefile, "LuCI package must be architecture independent")
     require("PKG_VERSION:=3.1.0" in makefile, "focused Router UI package version must be release locked")
-    require("PKG_RELEASE:=21" in makefile, "gated dual-mode LuCI release must be locked")
+    require("PKG_RELEASE:=22" in makefile, "desktop-compatible dual-mode LuCI release must be locked")
     require("+agent-netd" in makefile,
             "public IPv6 UI must install the restricted network executor")
     require("+agent-gw +agent-adapter" in makefile,
