@@ -136,6 +136,11 @@ domain, Relay and Directory setup remains explicit in Agent Router.
   incompletely configured VM will not be silently started by the launcher.
 - No LuCI: inspect the VM console and guest LAN address in Hyper-V Manager.
   Check DHCP is disabled and the host dedicated adapter is `192.168.246.2/24`.
+- Cloud authentication or publication stalls: before pairing, check the guest
+  clock in LuCI System settings and synchronize it with the browser or a working
+  NTP server. A fresh Hyper-V guest may interpret the host local RTC as UTC.
+  If correcting a large clock offset after pairing, restart `nexus-cloud` and
+  the test Agent, then allow one reconciliation interval (up to 120 seconds).
 - Shutdown unavailable: use the guest console to shut down; the launcher does
   not turn a failed graceful shutdown into a forced power-off.
 

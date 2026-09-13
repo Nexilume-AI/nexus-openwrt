@@ -32,10 +32,21 @@ identity; it is acceptance infrastructure, not the production gateway installer.
 - Nineteen Community Edge/certificate/Relay tests pass; the connector contract
   check passes.
 
-The successful integration run used the r3 VM with the connector source fix
-installed for validation and the Community fixes mounted into the test service.
-The earlier r3 ZIP does **not** contain connector r43. A rebuilt image needs its
-own fresh-boot acceptance before it can inherit this result.
+The initial integration run used the r3 VM with the connector source fix.
+The rebuilt r4 image then passed fresh boot, authenticated LuCI, first-time
+service enablement, local IPv6 management, Cloud pairing, Relay establishment,
+and the full MCP Echo invocation without runtime code patches. Connector r43
+is installed in this image. Community fixes were mounted into the isolated
+test service. The earlier r3 ZIP does **not** contain connector r43.
+
+r4 unbooted VHDX SHA-256:
+`b718b72cd8bf4ac4f9ece855102b0a9b4202d1006fdc7f0a8f20000fdd482213`
+
+Fresh Hyper-V RTC time was eight hours ahead of UTC in this environment. The
+guest clock was synchronized to the host UTC time and the connector restarted
+before the final call. Check time in LuCI before Cloud pairing, as described
+in README. This is a required configuration precondition, not an automatically
+validated time-sync feature of the launcher.
 
 ## Scope limits
 
@@ -44,3 +55,6 @@ prefix delegation, production throughput and other hypervisors remain untested.
 One IPv6 HTTPS target timed out while another succeeded; this is not a claim
 that every Internet destination is reachable. MCP acceptance used JSON requests;
 streaming is not supported by this runtime. No public binary was published.
+Reusing the earlier test Agent identity during VM replacement produced one SDK
+unsupported-registration-state error; migration/reuse of an existing identity
+is not accepted by this run. The fresh r4 Agent identity passed.
