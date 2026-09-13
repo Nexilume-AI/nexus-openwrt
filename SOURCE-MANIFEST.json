@@ -21,7 +21,7 @@
     "deploy/desktop/BUILD.md": "a12033780438383f984a0618ce8adab87d94aac71cfe16b2a119dd9c5dcb600a",
     "deploy/desktop/CLOUD-ACCEPTANCE.md": "85d5ce744429da939cb1aeb1d68160dd03c1081055a5e7f37e998918f930a13c",
     "deploy/desktop/README.md": "f25115550cf36f84fe4d13adae12998168313be44940ae2907ff57479a50c57c",
-    "deploy/desktop/TIME-ACCEPTANCE.md": "c8dcc94d9584870a4e55d5ee39ae68d5fc39160244107b32704b51aeb10ce033",
+    "deploy/desktop/TIME-ACCEPTANCE.md": "53e8cbd0017e8729defe5b93aa84fc2670f47f63369b7640f7b0a0d0ba88cb74",
     "deploy/desktop/configure-ipv6.ps1": "ded57304cb6ef62beac65c8b7820b3eb9d13ced0d15439518d4a823822fdc721",
     "deploy/desktop/files/etc/init.d/nexus-desktop-time": "01fd295ece7ec4ee47230ed74ff57ca4ade8bd0c67d52c671b1bced5aa7ad919",
     "deploy/desktop/files/etc/uci-defaults/99-nexus-desktop": "0cbc8ef681c7e493270024b81970cc9734451d1b0fb1daad1e5f8f4f29b29ff6",
