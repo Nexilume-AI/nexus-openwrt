@@ -38,7 +38,7 @@ acl = json.loads(
 )
 
 assert "PKG_NAME:=nexus-cloud-connector" in makefile
-assert "PKG_RELEASE:=42" in makefile
+assert "PKG_RELEASE:=43" in makefile
 for dependency in ("+agentd", "+agent-gw", "+agent-adapter", "+curl", "+jshn", "+openssl-util"):
     assert dependency in makefile
 assert "option enabled '0'" in config

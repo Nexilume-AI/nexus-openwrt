@@ -462,6 +462,19 @@ load_configuration() {
 
 	config_load agent
 	config_get router_id main router_id ''
+	# Match agentd's default Open Mesh identity instead of enrolling its UCI
+	# placeholder. Directory tickets must name the actual tunnel participant.
+	local router_mesh_mode identity_address identity_suffix
+	config_get router_mesh_mode main router_mesh_mode open
+	if [ "$router_mesh_mode" = open ] && [ "$router_id" = router-local ]; then
+		identity_address="$(cat /sys/class/net/br-lan/address 2>/dev/null)"
+		[ -n "$identity_address" ] || identity_address="$(cat /sys/class/net/eth0/address 2>/dev/null)"
+		identity_suffix="$(printf '%s' "$identity_address" | tr -d ':\r\n' | tr 'A-F' 'a-f')"
+		case "$identity_suffix" in
+			????????????) router_id="router-$identity_suffix" ;;
+			*) return 1 ;;
+		esac
+	fi
 	config_get domain_id main domain_id ''
 	config_get public_ipv6_mode main public_ipv6_mode routed-prefix
 	config_load agent_gateway
