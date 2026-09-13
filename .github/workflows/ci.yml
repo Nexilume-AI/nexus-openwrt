@@ -23,4 +23,4 @@ jobs:
       - name: Relay and Directory runtime
         run: npm --prefix relay test
       - name: Desktop bundle
-        run: python3 -m unittest discover -s deploy/desktop -p test_bundle.py
+        run: python3 -m unittest discover -s deploy/desktop -p 'test_*.py'

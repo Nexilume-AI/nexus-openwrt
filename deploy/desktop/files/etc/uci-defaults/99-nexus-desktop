@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 # Fresh ImageBuilder overlay only. Never apply to an existing router.
+/etc/init.d/nexus-desktop-time enable
+/etc/init.d/nexus-desktop-time start || logger -t nexus-desktop-time 'Initial time sync failed; verify UTC before Cloud pairing'
 # Local SDK sessions require the JWT verifier, even without Cloud enrollment.
 # Generate a per-installation verifier with no retained signing key: desktop
 # sessions use the gateway's source-bound session mechanism, not this key.

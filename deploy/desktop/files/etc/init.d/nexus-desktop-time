@@ -1,0 +1,27 @@
+#!/bin/sh /etc/rc.common
+# Hyper-V exposes UTC through its PTP clock even when the emulated RTC is local.
+# Set system time before boot-time identities; leave later discipline to NTP.
+START=05
+
+start() {
+    local entry clock='' seconds
+    for entry in /sys/class/ptp/ptp*; do
+        [ -r "$entry/clock_name" ] || continue
+        [ "$(cat "$entry/clock_name")" = hyperv ] || continue
+        [ -z "$clock" ] || { logger -t nexus-desktop-time 'Multiple Hyper-V clocks; refusing clock selection'; return 1; }
+        clock="/dev/${entry##*/}"
+    done
+    [ -n "$clock" ] && [ -c "$clock" ] || {
+        logger -t nexus-desktop-time 'Hyper-V clock unavailable; check time before Cloud pairing'
+        return 1
+    }
+    seconds="$(LC_ALL=C phc_ctl -q "$clock" get 2>&1 |
+        sed -n 's/.*clock time is \([0-9][0-9]*\.[0-9][0-9]*\) or .*/\1/p')"
+    case "$seconds" in *[!0-9.]*) seconds='' ;; esac
+    printf '%s\n' "$seconds" | grep -Eq '^[0-9]{10}\.[0-9]+$' || {
+        logger -t nexus-desktop-time 'Invalid Hyper-V clock sample; system time unchanged'
+        return 1
+    }
+    phc_ctl -q CLOCK_REALTIME set "$seconds" >/dev/null 2>&1 || return 1
+    logger -t nexus-desktop-time 'System UTC synchronized from Hyper-V clock'
+}

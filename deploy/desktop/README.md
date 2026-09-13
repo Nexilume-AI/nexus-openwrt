@@ -36,6 +36,12 @@ key is discarded. Cloud enrollment may replace the issuer configuration later.
 Device identities and signing keys must be
 generated in this installation, never shipped in the image.
 
+The r5 image sets system UTC from the Hyper-V hardware clock during first setup
+and at every boot, including offline use. Keep the Windows host clock correct.
+It does not read time from an unauthenticated network endpoint. If the Hyper-V
+clock is absent or invalid, inspect `logread -e nexus-desktop-time` and correct
+time before pairing. Older r4 images require manual clock synchronization.
+
 The script copies the release disk to `%LOCALAPPDATA%\Nexus\OpenWrtDesktop`,
 creates a Generation 2 VM with 1 GiB RAM and two CPUs, and disables Secure Boot
 for this image profile. Use `-InstallationDirectory`, `-MemoryMiB` and `-Processors`

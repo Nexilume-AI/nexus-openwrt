@@ -24,7 +24,7 @@ DHCP/RA disabled, no WAN attached.
 ```sh
 # In the matching ImageBuilder; the custom signed package repository is configured.
 make image PROFILE=generic \
-  PACKAGES="luci nexus-agent-router-seed agent-cardd" \
+  PACKAGES="luci nexus-agent-router-seed agent-cardd linuxptp" \
   FILES="/absolute/path/to/nexus_openwrt/deploy/desktop/files" \
   CONFIG_TARGET_ROOTFS_PARTSIZE=512
 ```
