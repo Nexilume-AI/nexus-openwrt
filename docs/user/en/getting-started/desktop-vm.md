@@ -66,6 +66,8 @@ As an alternative first start, choose a new dedicated location and resources:
 
 For that installation, append the same `-InstallationDirectory 'D:\NexusDesktop'` to subsequent commands. Do not treat an existing installation as a new instance. The examples below use the default location.
 
+The r5 image synchronizes UTC from Hyper-V on first boot and every restart, including offline use. Keep the Windows host clock correct. For older r4 images, synchronize time in LuCI System settings before Cloud pairing.
+
 ## 3. Status, shutdown and restart
 
 ```powershell
@@ -90,6 +92,14 @@ The desktop generates its own verifier public key on first boot, enables JWT
 verification and leaves public ingress disabled. Local SDK sessions need no
 preloaded Cloud credentials: use `http://192.168.246.1:7446` with `auth="auto"`
 after enabling **Agent services** in User mode.
+
+The r5 bundle includes SDK 0.46.2. Before running a host Python Agent, install the local wheel in your chosen Python environment:
+
+```powershell
+python -m pip install .\nexus_agent_sdk-0.46.2-py3-none-any.whl
+```
+
+Use `wait_for_cloud(timeout=300)` for Cloud publication. The SDK continues waiting through a temporary `unavailable` state while node presence recovers; the connector normally reconciles every 120 seconds.
 
 ## 5. Local IPv6 and upstream networking
 

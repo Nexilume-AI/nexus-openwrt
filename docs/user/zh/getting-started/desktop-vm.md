@@ -66,6 +66,8 @@ Get-VMSwitch
 
 该命令是首次启动的替代方式；目录应为新的专用目录。后续命令都加上相同的 `-InstallationDirectory 'D:\NexusDesktop'`，不要把已有安装误当成新的实例。下面示例使用默认目录。
 
+r5 镜像在首次启动和每次重启时自动从 Hyper-V 校准 UTC，离线也可使用。请保持 Windows 宿主机时间准确；如果使用旧 r4 镜像，先在 LuCI 系统设置中同步时间，再配对 Cloud。
+
 ## 3. 查看状态、停止和再次启动
 
 ```powershell
@@ -87,6 +89,14 @@ Stop 请求正常关机并保留数据；不会自动强制断电。Check 只验
 在 LuCI User mode 启用 **Agent services**，然后按[发布与调用 Agent API](../guides/publish-api.md)在电脑启动 Agent 并发起调用。依次确认 Local Agents 中有租约、Capability Routes 中有能力，以及调用方收到实际响应。刚启动时空列表正常，不能只用 VM 的 Running 状态判断服务可用。
 
 默认隔离网络不能访问互联网。需要 Cloud/Relay 或下载软件包时，先设置 root 密码，再按下一节选择提供上游网络的交换机；保留专用管理 LAN。
+
+r5 体验包附带 SDK 0.46.2。在运行电脑上的 Python Agent 前，可在所选 Python 环境安装本地 wheel：
+
+```powershell
+python -m pip install .\nexus_agent_sdk-0.46.2-py3-none-any.whl
+```
+
+等待 Cloud 发布时可使用 `wait_for_cloud(timeout=300)`。节点恢复期间的 `unavailable` 是暂时未就绪，SDK 会继续等待；连接器通常每 120 秒同步一次。
 
 ## 5. 配置本地 IPv6 与上游网络
 

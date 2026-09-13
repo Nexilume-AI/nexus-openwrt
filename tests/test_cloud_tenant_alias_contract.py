@@ -88,6 +88,9 @@ def test_connector_projects_cloud_tenant_without_sdk_credentials() -> None:
     assert 'rm -f "$AGENT_CLOUD_ENABLED" "$AGENT_CLOUD_ENROLLED" "$AGENT_CLOUD_TENANT_ID"' in connector
     assert "procd_add_jail_mount /var/run/agent-manifests" in gateway_init
     assert "procd_add_jail_mount /var/run/nexus-agent-cloud" in agentd_init
+    assert agentd_init.index("mkdir -p /var/run/nexus-agent-cloud") < agentd_init.index("procd_open_instance")
+    assert "chmod 0755 /var/run/nexus-agent-cloud" in agentd_init
+    assert "[ ! -d /var/run/nexus-agent-cloud ]" not in agentd_init
 
 
 def test_connector_preserves_terminal_states_and_mapping_conflicts() -> None:
