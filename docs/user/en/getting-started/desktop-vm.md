@@ -86,6 +86,11 @@ Enable **Agent services** in LuCI User mode, then [publish and invoke an Agent](
 
 The isolated network has no Internet access by default. For Cloud/Relay or package downloads, set a root password first, then select an upstream switch as described below while retaining the dedicated management LAN.
 
+The desktop generates its own verifier public key on first boot, enables JWT
+verification and leaves public ingress disabled. Local SDK sessions need no
+preloaded Cloud credentials: use `http://192.168.246.1:7446` with `auth="auto"`
+after enabling **Agent services** in User mode.
+
 ## 5. Local IPv6 and upstream networking
 
 The launcher also configures IPv6 on the dedicated network: guest `fd6e:6578:7573:246::1/64`, host `fd6e:6578:7573:246::2/64`. Open [LuCI over IPv6](http://[fd6e:6578:7573:246::1]/). These are private ULA addresses, not public Internet addresses.

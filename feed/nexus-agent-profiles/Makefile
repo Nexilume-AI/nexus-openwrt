@@ -8,6 +8,10 @@ PKG_MAINTAINER:=Nexus OpenWrt Team
 
 include $(INCLUDE_DIR)/package.mk
 
+# These metapackages only install profile metadata; there is no source to build.
+define Build/Compile
+endef
+
 define Package/nexus-agent-profile/default
   SECTION:=net
   CATEGORY:=Network

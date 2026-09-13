@@ -81,6 +81,76 @@ class BundleTests(unittest.TestCase):
             self.prepare()
         self.assertFalse(self.output.exists())
 
+    def test_ipv6_tracks_hyperv_child_directory(self):
+        shell = shutil.which('pwsh') or shutil.which('powershell')
+        if not shell:
+            self.skipTest('PowerShell is unavailable')
+        installation = self.root/'installation'
+        installation.mkdir()
+        state = dict(installation=str(installation), configured=True,
+                     vm_id='00000000-0000-0000-0000-000000000001',
+                     switch_id='00000000-0000-0000-0000-000000000002',
+                     vm_name='Nexus-OpenWrt-Desktop')
+        wrapper = self.root/'ipv6-test.ps1'
+        wrapper.write_text('''param($Script, $Installation, $Corrupt)
+$global:desktopTestVmPath = Join-Path $Installation 'Nexus-OpenWrt-Desktop'
+if ($Corrupt -eq 'yes') { $global:desktopTestVmPath = $Installation }
+function global:Import-Module { param($Name) }
+function global:Get-VM { param($Id); [pscustomobject]@{Name='Nexus-OpenWrt-Desktop'; Path=$global:desktopTestVmPath; State='Running'} }
+function global:Get-VMSwitch { param($Id); [pscustomobject]@{SwitchType='Internal'; Name='test'} }
+function global:Get-NetAdapter { param($Name); [pscustomobject]@{Name='test'; ifIndex=123} }
+function global:Get-NetAdapterBinding { param($Name,$ComponentID); [pscustomobject]@{Enabled=$true} }
+function global:Get-Command { param($Name,$ErrorAction) }
+& $Script -InstallationDirectory $Installation -WhatIf
+''', encoding='utf-8-sig')
+        for recorded in (False, True):
+            if recorded:
+                state['vm_path'] = str(installation/state['vm_name'])
+            (installation/'desktop-state.json').write_text(json.dumps(state), encoding='utf-8')
+            for corrupt in (False, True):
+                with self.subTest(recorded=recorded, corrupt=corrupt):
+                    result = subprocess.run([shell, '-NoProfile', '-NonInteractive', '-File',
+                        str(wrapper), str(HERE/'configure-ipv6.ps1'), str(installation),
+                        'yes' if corrupt else 'no'], capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode == 0, not corrupt, result.stderr)
+
+    def test_resume_tracks_hyperv_child_directory(self):
+        shell = shutil.which('pwsh') or shutil.which('powershell')
+        if not shell:
+            self.skipTest('PowerShell is unavailable')
+        installation = self.root/'installation'
+        installation.mkdir()
+        vm_name = 'Nexus-OpenWrt-Desktop'
+        wrapper = self.root/'resume-test.ps1'
+        wrapper.write_text('''param($Launcher, $Installation, $Corrupt)
+$global:desktopTestInstallation = $Installation
+$global:desktopTestVmPath = Join-Path $Installation 'Nexus-OpenWrt-Desktop'
+if ($Corrupt -eq 'yes') { $global:desktopTestVmPath = Join-Path $Installation 'other-vm' }
+function global:Import-Module { param($Name) }
+function global:Get-VM {
+    param($Id)
+    [pscustomobject]@{Name='Nexus-OpenWrt-Desktop'; Path=$global:desktopTestVmPath; State='Off'; Status='Operating normally'}
+}
+function global:Get-VMHardDiskDrive {
+    param($VM)
+    [pscustomobject]@{Path=(Join-Path $global:desktopTestInstallation 'nexus-openwrt.vhdx')}
+}
+& $Launcher -Action Status -InstallationDirectory $Installation
+''', encoding='utf-8-sig')
+        for recorded in (False, True):
+            state = dict(schema_version=1, installation=str(installation),
+                         vm_id='00000000-0000-0000-0000-000000000001',
+                         vm_name=vm_name, configured=True)
+            if recorded:
+                state['vm_path'] = str(installation/vm_name)
+            (installation/'desktop-state.json').write_text(json.dumps(state), encoding='utf-8')
+            for corrupt in (False, True):
+                with self.subTest(recorded=recorded, corrupt=corrupt):
+                    result = subprocess.run([shell, '-NoProfile', '-NonInteractive', '-File',
+                        str(wrapper), str(HERE/'start-nexus-openwrt.ps1'), str(installation),
+                        'yes' if corrupt else 'no'], capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode == 0, not corrupt, result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

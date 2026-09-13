@@ -351,6 +351,8 @@ start_service() {
 	# non-jailed gateway instances consume this same path.
 	mkdir -p /var/run/agentd
 	chown agentd:agentd /var/run/agentd
+	# First-boot TLS generation uses umask 077. Gateway IPC needs group traversal.
+	chmod 0750 /var/run/agentd
 	mkdir -p /var/run/agent-manifests
 	chown agentd:agentd /var/run/agent-manifests
 	chmod 0755 /var/run/agent-manifests

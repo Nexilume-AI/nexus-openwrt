@@ -82,6 +82,8 @@ Stop 请求正常关机并保留数据；不会自动强制断电。Check 只验
 
 在电脑运行 Python Agent 时，按 SDK 指南使用可由虚拟机访问的 `192.168.246.2` 监听地址；只监听 `127.0.0.1` 无法被虚拟机回调。需要主机防火墙规则时，仅放行选定 Agent 端口和虚拟机来源地址。
 
+桌面镜像首次开机自动准备本机独立的认证校验公钥，启用 JWT 校验，并关闭公网入站。无需预置 Cloud 凭据即可使用本地 SDK 会话；Agent 使用 `http://192.168.246.1:7446` 和 `auth="auto"`。
+
 在 LuCI User mode 启用 **Agent services**，然后按[发布与调用 Agent API](../guides/publish-api.md)在电脑启动 Agent 并发起调用。依次确认 Local Agents 中有租约、Capability Routes 中有能力，以及调用方收到实际响应。刚启动时空列表正常，不能只用 VM 的 Running 状态判断服务可用。
 
 默认隔离网络不能访问互联网。需要 Cloud/Relay 或下载软件包时，先设置 root 密码，再按下一节选择提供上游网络的交换机；保留专用管理 LAN。

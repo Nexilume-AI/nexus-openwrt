@@ -19,12 +19,34 @@ uci_bool() {
 }
 
 config_generation() {
+	local digest
+	digest="$(
 	{
 		uci -q export agent 2>/dev/null
 		uci -q export agent_gateway 2>/dev/null
 		uci -q export agent_adapter 2>/dev/null
 		uci -q export nexus_cloud 2>/dev/null | sed '/pairing_code/d'
-	} | cksum | awk '{ print $1 }'
+	} | sha256sum | cut -c1-8
+	)"
+	# Preserve the ubus integer contract without optional BusyBox cksum.
+	printf '%u\n' "$((0x$digest & 2147483647))"
+}
+
+acquire_ui_lock() {
+	local attempts=0
+	mkdir -p /var/lock || return 1
+	exec 9>"$LOCK_FILE" || return 1
+	# BusyBox flock has no -w timeout; bound retries explicitly.
+	while ! flock -n 9; do
+		[ "$attempts" -lt 10 ] || { exec 9>&-; return 1; }
+		sleep 1
+		attempts=$((attempts + 1))
+	done
+}
+
+release_ui_lock() {
+	flock -u 9
+	exec 9>&-
 }
 
 json_reply_error() {
@@ -295,7 +317,8 @@ reload_feature() {
 		router_network) /etc/init.d/agentd reload >/dev/null 2>&1 ;;
 		agent_services)
 			/etc/init.d/agent-gw reload >/dev/null 2>&1 &&
-			/etc/init.d/agent-adapter reload >/dev/null 2>&1
+			/etc/init.d/agent-adapter reload >/dev/null 2>&1 &&
+			/etc/init.d/agent-edge reload >/dev/null 2>&1
 			;;
 		*) return 1 ;;
 	esac
@@ -307,7 +330,7 @@ verify_feature() {
 	case "$feature" in
 		cloud) service_running nexus-cloud ;;
 		router_network) service_running agentd ;;
-		agent_services) service_running agent-gw && service_running agent-adapter ;;
+		agent_services) service_running agent-gw && service_running agent-adapter && service_running agent-edge ;;
 		*) return 1 ;;
 	esac
 }
@@ -419,16 +442,16 @@ set_feature() {
 	json_get_var expected expected_generation
 	case "$feature" in cloud|router_network|agent_services) ;; *) json_reply_error INVALID_FEATURE 'Unknown Nexus feature.'; return ;; esac
 	case "$enabled" in 1|true) enabled=1 ;; 0|false) enabled=0 ;; *) json_reply_error INVALID_REQUEST 'enabled must be a boolean.'; return ;; esac
-	lock -w 10 "$LOCK_FILE" || { json_reply_error BUSY 'Another Nexus configuration change is in progress.'; return; }
+	acquire_ui_lock || { json_reply_error BUSY 'Another Nexus configuration change is in progress.'; return; }
 	current="$(config_generation)"
 	if [ -n "$expected" ] && [ "$expected" != "$current" ]; then
-		lock -u "$LOCK_FILE"
+		release_ui_lock
 		json_reply_error CONFIGURATION_CHANGED 'The Router configuration changed. Refresh before trying again.'
 		return
 	fi
 	set_feature_locked "$feature" "$enabled"
 	result=$?
-	lock -u "$LOCK_FILE"
+	release_ui_lock
 	case "$result" in
 		0) json_reply_ok "$([ "$enabled" = 1 ] && printf ready || printf disabled)" ;;
 		2) json_reply_error INVALID_FEATURE 'Unknown Nexus feature.' ;;
@@ -446,10 +469,10 @@ pair_cloud() {
 		''|*[!A-Za-z0-9._~-]*) json_reply_error INVALID_PAIRING_CODE 'Enter the one-time pairing code from Nexus Cloud.'; return ;;
 	esac
 	[ "${#code}" -le 256 ] || { json_reply_error INVALID_PAIRING_CODE 'The pairing code is too long.'; return; }
-	lock -w 10 "$LOCK_FILE" || { json_reply_error BUSY 'Another Nexus configuration change is in progress.'; return; }
+	acquire_ui_lock || { json_reply_error BUSY 'Another Nexus configuration change is in progress.'; return; }
 	current="$(config_generation)"
 	if [ -n "$expected" ] && [ "$expected" != "$current" ]; then
-		lock -u "$LOCK_FILE"
+		release_ui_lock
 		json_reply_error CONFIGURATION_CHANGED 'The Router configuration changed. Refresh before trying again.'
 		return
 	fi
@@ -460,7 +483,7 @@ pair_cloud() {
 	case "$base" in
 		https://*) ;;
 		*)
-			lock -u "$LOCK_FILE"
+			release_ui_lock
 			json_reply_error CLOUD_PROFILE_MISSING 'This firmware does not contain a Nexus Cloud profile. Update the firmware or configure it in Developer mode.'
 			return
 			;;
@@ -480,11 +503,11 @@ pair_cloud() {
 		restore_option nexus_cloud main enabled old_pair_enabled
 		uci commit nexus_cloud
 		reload_feature cloud || true
-		lock -u "$LOCK_FILE"
+		release_ui_lock
 		json_reply_error APPLY_FAILED 'The Router could not start Nexus Cloud pairing.'
 		return
 	fi
-	lock -u "$LOCK_FILE"
+	release_ui_lock
 	json_reply_ok pairing
 }
 

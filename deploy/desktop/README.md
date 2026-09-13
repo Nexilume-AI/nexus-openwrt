@@ -3,10 +3,12 @@
 Windows/Hyper-V desktop launch kit for the full OpenWrt + LuCI + Nexus Agent
 Router stack. The production device/feed installation remains separate.
 
-**Status: launcher and image recipe, not yet a published or boot-accepted desktop
-release.** No prebuilt image is bundled in this source checkout. A publisher must
-build and validate a clean image using `BUILD.md` before offering a one-command
-download. Do not use a disk copied from an existing router or Cloud-connected VM.
+The source checkout contains the launcher and clean-image recipe. A prepared
+bundle contains a preinstalled VHDX and needs no host SDK or compilation.
+The 2026-09-13 candidate passed real Hyper-V first-boot and restart acceptance;
+see [the acceptance record](ACCEPTANCE.md) for its exact image hash and scope.
+GitHub publication of the binary is separate from this local validation.
+Never redistribute a disk copied from an existing or Cloud-connected VM.
 
 ## Run a prepared release bundle
 
@@ -25,8 +27,13 @@ Verify its publisher/release checksum before extraction. In the extracted folder
 ```
 
 Open [LuCI](http://192.168.246.1/) after the guest boots. Set a unique root
-password first, then open **Services → Agent Router** and use the existing
-first-node/trust-domain setup. Device identities and signing keys must be
+password first, then open **Status → Agent Routing → User mode** and use the existing
+first-node/trust-domain setup. Enable **Agent services** for the local SDK listener
+at `http://192.168.246.1:7446` using `auth="auto"`. The fresh desktop configures
+JWT verification and source-bound LAN sessions, with public ingress disabled.
+A unique verifier public key is generated on first boot; its signing private
+key is discarded. Cloud enrollment may replace the issuer configuration later.
+Device identities and signing keys must be
 generated in this installation, never shipped in the image.
 
 The script copies the release disk to `%LOCALAPPDATA%\Nexus\OpenWrtDesktop`,
@@ -78,7 +85,9 @@ not Internet-routable. To reapply it, use Administrator PowerShell:
 
 The script uses OpenSSH to configure the guest and prompts for the root password
 or uses your existing SSH authentication. It does not store passwords and checks
-the guest host key. Set the root password in LuCI before using it.
+the guest host key. Set the root password in LuCI before using it. For existing
+key-based access, use `-IdentityFile` and `-KnownHostsFile`; the latter requires
+a previously verified host-key file and enforces strict verification.
 
 To add a WAN on an existing upstream switch and request DHCPv6 addresses/prefixes:
 

@@ -5,7 +5,7 @@ LUCI_DEPENDS:=+luci-base +agentd +agent-netd +agent-gw +agent-adapter +nexus-age
 LUCI_PKGARCH:=all
 
 PKG_VERSION:=3.1.0
-PKG_RELEASE:=21
+PKG_RELEASE:=22
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
 

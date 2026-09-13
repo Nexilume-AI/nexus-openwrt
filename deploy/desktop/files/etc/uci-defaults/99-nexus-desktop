@@ -1,6 +1,27 @@
 #!/bin/sh
 set -eu
 # Fresh ImageBuilder overlay only. Never apply to an existing router.
+# Local SDK sessions require the JWT verifier, even without Cloud enrollment.
+# Generate a per-installation verifier with no retained signing key: desktop
+# sessions use the gateway's source-bound session mechanism, not this key.
+# Cloud enrollment can later install its own issuer/JWKS configuration.
+(
+umask 077
+mkdir -p /etc/agent-gw
+if [ ! -s /etc/agent-gw/jwt-public.pem ]; then
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null |
+        openssl pkey -pubout -out /etc/agent-gw/jwt-public.pem.tmp
+    openssl pkey -pubin -in /etc/agent-gw/jwt-public.pem.tmp -noout
+    mv /etc/agent-gw/jwt-public.pem.tmp /etc/agent-gw/jwt-public.pem
+fi
+chmod 0644 /etc/agent-gw/jwt-public.pem
+)
+uci set agent_gateway.main.auth_mode='jwt'
+uci set agent_gateway.main.jwt_required='1'
+# The isolated desktop starts with local IPv6 only, no public ingress.
+uci set agent.main.public_ipv6_enabled='0'
+uci commit agent_gateway
+uci commit agent
 uci set system.@system[0].hostname='nexus-desktop'
 uci set network.lan.proto='static'
 uci set network.lan.ipaddr='192.168.246.1'

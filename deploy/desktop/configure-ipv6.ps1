@@ -4,7 +4,9 @@ param(
     [string]$InstallationDirectory = (Join-Path $env:LOCALAPPDATA 'Nexus\OpenWrtDesktop'),
     [string]$RouterAddress = '192.168.246.1',
     [ValidatePattern('^[a-zA-Z0-9_.:-]{0,15}$')][string]$WanDevice = '',
-    [string]$WanSwitchName = ''
+    [string]$WanSwitchName = '',
+    [string]$IdentityFile = '',
+    [string]$KnownHostsFile = ''
 )
 $ErrorActionPreference = 'Stop'
 $address = $null
@@ -14,7 +16,9 @@ $installation = [IO.Path]::GetFullPath($InstallationDirectory)
 $state = Get-Content -LiteralPath (Join-Path $installation 'desktop-state.json') -Raw | ConvertFrom-Json
 if ($state.installation -ne $installation -or $state.configured -ne $true) { throw 'Desktop installation is not configured.' }
 $vm = Get-VM -Id ([guid]$state.vm_id)
-if ($vm.Name -ne $state.vm_name -or [IO.Path]::GetFullPath($vm.Path) -ne $installation -or $vm.State -ne 'Running') {
+$expectedVmPath = [IO.Path]::GetFullPath((Join-Path $installation $state.vm_name))
+if (($state.vm_path -and [IO.Path]::GetFullPath($state.vm_path) -ne $expectedVmPath) -or
+    $vm.Name -ne $state.vm_name -or [IO.Path]::GetFullPath($vm.Path) -ne $expectedVmPath -or $vm.State -ne 'Running') {
     throw 'The tracked desktop VM must be running with its original identity.'
 }
 $switch = Get-VMSwitch -Id ([guid]$state.switch_id)
@@ -95,7 +99,13 @@ echo 'WAN6_STATUS (an empty ipv6-address/prefix is NOT public IPv6 success):'
 ubus call network.interface.wan6 status
 echo 'DHCPv6 configured. Public address/prefix and external reachability require upstream support.'
 '@
-$guestScript | & ssh.exe -T -o StrictHostKeyChecking=ask "root@$RouterAddress" "tr -d '\r' | sh -s -- $Mode $WanDevice"
+$hostKeyPolicy = if ($KnownHostsFile) { 'StrictHostKeyChecking=yes' } else { 'StrictHostKeyChecking=ask' }
+$sshOptions = @('-T', '-o', $hostKeyPolicy)
+if ($IdentityFile) { $sshOptions += @('-i', (Resolve-Path -LiteralPath $IdentityFile).Path, '-o', 'BatchMode=yes') }
+if ($KnownHostsFile) {
+    $sshOptions += @('-o', ('UserKnownHostsFile=' + (Resolve-Path -LiteralPath $KnownHostsFile).Path))
+}
+$guestScript | & ssh.exe @sshOptions "root@$RouterAddress" "tr -d '\r' | sh -s -- $Mode $WanDevice"
 if ($LASTEXITCODE -ne 0) { throw 'Guest IPv6 configuration failed. Inspect the reported cause before retrying.' }
 Write-Output 'Private IPv6 management: http://[fd6e:6578:7573:246::1]/'
 Write-Output 'Local ULA is not globally routable. Upstream mode reports DHCPv6 status and does not claim inbound Internet reachability.'

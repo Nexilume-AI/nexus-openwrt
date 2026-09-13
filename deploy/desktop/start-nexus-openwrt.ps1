@@ -75,7 +75,15 @@ if ($Action -eq 'Check' -or ($Action -eq 'Start' -and $null -eq $state)) {
 Import-Module Hyper-V -ErrorAction Stop
 if ($null -ne $state) {
     $vm = Get-VM -Id ([guid]$state.vm_id) -ErrorAction Stop
-    if ($vm.Name -ne $state.vm_name -or [IO.Path]::GetFullPath($vm.Path) -ne $installation) {
+    # Hyper-V creates a per-VM child directory beneath New-VM -Path.
+    $expectedVmPath = if ($state.PSObject.Properties.Name -contains 'vm_path') {
+        [IO.Path]::GetFullPath($state.vm_path)
+    } else {
+        # Compatibility with the first launcher, which recorded only its parent.
+        [IO.Path]::GetFullPath((Join-Path $installation $state.vm_name))
+    }
+    if ($expectedVmPath -ne [IO.Path]::GetFullPath((Join-Path $installation $state.vm_name)) -or
+        $vm.Name -ne $state.vm_name -or [IO.Path]::GetFullPath($vm.Path) -ne $expectedVmPath) {
         throw 'Tracked VM identity/path changed; refusing to operate.'
     }
     $disk = @(Get-VMHardDiskDrive -VM $vm)
@@ -129,7 +137,7 @@ Copy-Item -LiteralPath $imagePath -Destination $diskPath
 $switch = New-VMSwitch -Name $switchName -SwitchType Internal
 $vm = New-VM -Name $vmName -Generation 2 -MemoryStartupBytes ($MemoryMiB * 1MB) -Path $installation -VHDPath $diskPath -SwitchName $switchName
 # Persist identity before further configuration. On failure retain objects for diagnosis.
-$state = [ordered]@{schema_version=1; installation=$installation; vm_id=[string]$vm.Id; vm_name=$vmName; switch_id=[string]$switch.Id; image_sha256=$manifest.sha256; configured=$false}
+$state = [ordered]@{schema_version=1; installation=$installation; vm_id=[string]$vm.Id; vm_name=$vmName; vm_path=[IO.Path]::GetFullPath($vm.Path); switch_id=[string]$switch.Id; image_sha256=$manifest.sha256; configured=$false}
 $state |
     ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
 $lanAdapter = Get-VMNetworkAdapter -VM $vm | Select-Object -First 1
@@ -145,6 +153,6 @@ New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress 'fd6e:6578:7573:246
 $state.configured = $true
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
 Start-VM -VM $vm | Out-Null
-Write-Output 'VM started. Open http://192.168.246.1/ after guest boot; set a unique root password, then use Services > Agent Router.'
+Write-Output 'VM started. Open http://192.168.246.1/ after guest boot; set a unique root password, then open Status > Agent Routing > User mode.'
 Write-Output 'Private IPv6: guest fd6e:6578:7573:246::1, host fd6e:6578:7573:246::2. Public IPv6 requires a separately configured upstream.'
 Write-Output 'No WAN or physical bridge was connected. Follow README.md before enabling Internet or remote Agents.'
