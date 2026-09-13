@@ -55,6 +55,19 @@ release bytes/profile, not the mutable installed disk, boot health, or provenanc
 
 ## Network and first Agent
 
+For host Python Agents, the follow-up acceptance bundle includes SDK 0.46.2.
+Install its wheel in your chosen Python environment before testing Cloud
+re-registration (Python is needed for a host Agent, not for VM startup):
+
+```powershell
+python -m pip install .\nexus_agent_sdk-0.46.2-py3-none-any.whl
+```
+
+This SDK waits through the temporary Cloud `unavailable` state while node
+presence recovers. Allow up to 300 seconds in `wait_for_cloud(timeout=300)`;
+the connector normally reconciles every 120 seconds. This local wheel has not
+been published to PyPI by this acceptance task.
+
 The dedicated **Internal** switch connects only this VM and the host. The host
 uses `192.168.246.2/24`, the guest `192.168.246.1/24`. No default gateway, DNS,
 host firewall changes, physical bridge, WAN, or DHCP advertisements are added.

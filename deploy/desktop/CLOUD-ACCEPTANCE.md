@@ -55,6 +55,22 @@ prefix delegation, production throughput and other hypervisors remain untested.
 One IPv6 HTTPS target timed out while another succeeded; this is not a claim
 that every Internet destination is reachable. MCP acceptance used JSON requests;
 streaming is not supported by this runtime. No public binary was published.
-Reusing the earlier test Agent identity during VM replacement produced one SDK
-unsupported-registration-state error; migration/reuse of an existing identity
-is not accepted by this run. The fresh r4 Agent identity passed.
+
+## Same-origin re-registration follow-up
+
+The earlier SDK error was reproduced: the Cloud registration API legitimately
+returned `unavailable` while node presence recovered, but SDK 0.46.1 rejected
+that state. SDK 0.46.2 accepts it as non-ready and continues bounded polling.
+The regression failed before the fix; all 24 facade tests pass afterward.
+
+Using the old `agent://desktop-test/relay-echo` origin on the replacement VM
+now reaches `ready` and completes a real MCP Echo call. After stopping the Agent,
+reconciling its withdrawal and starting it again, both the Cloud Agent ID and
+Runtime ID are unchanged and the Echo call succeeds again. The built wheel was
+installed locally, its patched modules matched the tested source, and its
+non-ready state handling was checked in an isolated Python process.
+
+This verifies same-origin re-registration and stable identity across Agent
+stop/start on the replacement VM. It does not claim to transfer the original
+VM's Cloud Agent ID to another router or override ownership boundaries.
+The follow-up bundle adds SDK 0.46.2; the r4 VHDX bytes remain unchanged.
