@@ -6,7 +6,7 @@ authors:
   - name: "Nexus contributors"
 repository-code: "https://github.com/Nexilume-AI/nexus-openwrt"
 url: "https://github.com/Nexilume-AI/nexus-openwrt"
-license: Apache-2.0
+license-url: "https://github.com/Nexilume-AI/nexus-openwrt/blob/main/LICENSE"
 keywords:
   - "OpenWrt"
   - "LuCI"

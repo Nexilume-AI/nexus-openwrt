@@ -1,11 +1,11 @@
 Nexus OpenWrt
 Copyright Nexus contributors
 
-The Apache License, Version 2.0 in LICENSE applies to Nexus-authored code in
+The Nexus Community License 1.0 in LICENSE applies to Nexus-authored code in
 this directory unless a file or component carries a different license notice.
 In particular, the Nexus-owned agent-adapter, agent-cardd, agent-gw, agent-netd,
 agentd, luci-app-agent-router, nexus-agent-profiles, nexus-agent-services,
-nexus-cloud-connector and nexus-luci-theme-profile packages declare Apache-2.0.
+nexus-cloud-connector and nexus-luci-theme-profile packages declare LicenseRef-Nexus-Community-1.0.
 Their direct packaging scripts use the same package license metadata.
 
 This notice does not relicense third-party code, dependencies or separately

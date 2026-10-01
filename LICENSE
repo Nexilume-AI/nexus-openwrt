@@ -1,3 +1,92 @@
+Nexus Community License, Version 1.0
+SPDX-License-Identifier: LicenseRef-Nexus-Community-1.0
+
+Licensor: the Nexus project copyright owner granting rights in this Work,
+contactable at cary.nexilume@outlook.com. This designation does not assert
+ownership of third-party code or of contributions without an appropriate grant.
+
+This is a source-available license, not the unmodified Apache License 2.0 and
+not an OSI-approved open-source license. The Apache License 2.0 text reproduced
+below is incorporated subject to the following additional conditions. These
+conditions prevail for the Nexus-authored Work where they differ from that text.
+
+1. Permitted use and multi-tenant operation
+
+Personal use, evaluation, modification, redistribution and single-tenant
+self-hosting, including commercial single-tenant use, are permitted subject to
+this license. Operating the Work or a derivative of the Work as a service or
+platform for two or more independent tenants requires prior, explicit written
+commercial authorization from the Licensor. This applies whether or not the
+operator charges users, and whether tenancy is implemented in one deployment
+or in separately deployed instances of the same offered service.
+
+A tenant is an independently administered workspace or organization with its
+own logically separated user access, data and configuration. Multiple users,
+projects or devices within one such tenant do not by themselves constitute
+multiple tenants. Giving the same service a different name does not avoid this
+condition. Merely distributing source code does not constitute operating it.
+
+Using the Nexus SDK, Mobile client, Computer Runtime or OpenWrt client solely
+to connect to a service does not make the client user its multi-tenant operator.
+The service operator remains responsible for authorization. An independent
+application that only uses public interfaces, and does not operate the Work or
+a derivative as a multi-tenant platform, is not restricted on that account.
+
+2. Product attribution and branding
+
+When operating or distributing a Nexus user interface or a derivative of it,
+retain the Nexus names, logos, copyright notices and attribution displayed by
+the supplied interface. Do not remove, replace, obscure or make them materially
+less visible without prior written authorization from the Licensor. Additional
+branding may be displayed without suggesting endorsement and without obscuring
+the retained attribution. Ordinary responsive or accessibility adjustments that
+preserve its meaning and visibility are permitted.
+
+This applies to Nexus web consoles, Nexus-authored LuCI pages, Mobile screens
+and other supplied graphical interfaces. It does not require an independent
+interface or a headless SDK/API integration to add a Nexus logo it never
+displayed. Source and redistribution notices must still be retained as required
+by this license. No general trademark license or endorsement is granted.
+
+3. Contributions and future licensing
+
+Contributions intended for incorporation must be covered by the separate Nexus
+Contributor License Agreement, Version 1.0, or an individually executed written
+agreement accepted by the Licensor. The contribution agreement provides the
+rights needed for commercial use, dual licensing and future releases under
+different, more permissive or more restrictive terms. Contributors retain
+ownership. Mere use of the software is not acceptance of a contributor grant.
+
+License changes apply to versions offered under the changed terms; they do not
+revoke rights already granted for an earlier version. Existing contributions
+are not deemed to have accepted a new contributor agreement retroactively.
+
+4. Scope, prior releases and third-party material
+
+These terms apply only to the Nexus-authored material made available under this
+license and contributions the Licensor is authorized to license this way.
+Separately identified third-party files and dependencies keep their licenses,
+including any Apache, MIT or GPL obligations. Do not remove their notices or
+apply these additional conditions to their independent licenses. A complete
+OpenWrt firmware image is not licensed solely under these terms. If applicable
+third-party obligations do not permit a proposed combination, obtain a compatible
+license or do not distribute that combination.
+
+Previously distributed Apache-2.0 versions remain available under the grants
+made with those versions; this license does not revoke or restrict those grants.
+Private Enterprise implementation is not granted by publishing this Work.
+
+5. Commercial exceptions and distribution
+
+Contact cary.nexilume@outlook.com for multi-tenant, branding or other commercial
+permissions. A separate written agreement must identify its covered parties,
+software and permitted use. A request for permission is not authorization.
+Redistributors must include this entire license, not only its Apache portion.
+The English text governs; translated explanations are informational.
+
+Incorporated Apache License 2.0 terms (unmodified text follows)
+============================================================
+
 Apache License
 
 Version 2.0, January 2004

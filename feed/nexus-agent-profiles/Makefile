@@ -3,7 +3,7 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=nexus-agent-profiles
 PKG_VERSION:=1.0.0
 PKG_RELEASE:=2
-PKG_LICENSE:=Apache-2.0
+PKG_LICENSE:=LicenseRef-Nexus-Community-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
 
 include $(INCLUDE_DIR)/package.mk

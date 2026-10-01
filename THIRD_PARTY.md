@@ -2,7 +2,7 @@
 
 | Component | Source / license evidence | Distribution in this snapshot |
 | --- | --- | --- |
-| Nexus-authored code | Root LICENSE and per-package Makefiles; Apache-2.0 | Source |
+| Nexus-authored code | Root LICENSE and per-package Makefiles; Nexus Community License 1.0 | Source |
 | OpenWrt Node recipe | `feed/nexus-node-runtime/Makefile` and adjacent `COPYING`; GPL v2 notice retained | Recipe and patches, not Node binaries |
 | Node.js | Version, archive checksum and upstream LICENSE named in the Node recipe; MIT plus bundled dependency notices | Downloaded by build; retain upstream notices with binaries |
 | Argon | `dependencies/luci-theme-argon.lock` and `.NOTICE.md`; Apache-2.0 | Checksum-locked external source, not vendored |

@@ -4,7 +4,7 @@
 
 **Give your Agents a network.**
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-17251d.svg)](LICENSE)
+[![License: Nexus Community](https://img.shields.io/badge/License-Nexus_Community-17251d.svg)](LICENSE)
 [![文档](https://img.shields.io/badge/Read-the_docs-b8ef73.svg)](docs/user/en/index.md)
 [![引用项目](https://img.shields.io/badge/Cite-this_software-e8e9e4.svg)](#引用)
 [![Repository checks](https://github.com/Nexilume-AI/nexus-openwrt/actions/workflows/ci.yml/badge.svg)](https://github.com/Nexilume-AI/nexus-openwrt/actions/workflows/ci.yml)
@@ -68,7 +68,7 @@ flowchart LR
 | 编译、签名、主机测试与发布范围 | [完整参考](README_GUIDE.md) |
 | 版本变化 | [Changelog](CHANGELOG.md) |
 
-Nexus 自有代码采用 Apache-2.0；OpenWrt 固件和 Node 构建配方等保留各自许可，不能把整张固件称为仅 Apache-2.0。
+Nexus 自有代码采用 Nexus Community License 1.0；OpenWrt 固件和 Node 构建配方等保留各自许可，不能把整张固件称为仅 Apache-2.0。
 
 ## 项目生态
 
@@ -103,4 +103,8 @@ Nexus 自有代码采用 Apache-2.0；OpenWrt 固件和 Node 构建配方等保�
 
 ## 许可证
 
-Nexus 自有代码采用 [Apache-2.0](LICENSE)。第三方组件保留各自许可证与声明；公开文档不授予独立企业版实现的使用权。完整固件还包含其他许可证组件，见 [NOTICE](NOTICE) 和 [THIRD_PARTY.md](THIRD_PARTY.md)。
+Nexus 自有代码采用 [Nexus Community License 1.0](LICENSE)。第三方组件保留各自许可证与声明；公开文档不授予独立企业版实现的使用权。完整固件还包含其他许可证组件，见 [NOTICE](NOTICE) 和 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
+### Licensing conditions / 许可条件
+
+Source-available, not unmodified Apache-2.0 or OSI-approved open source. Multi-tenant service operation and removal of existing Nexus UI branding require prior written authorization. Earlier Apache-2.0 grants and third-party licenses remain unchanged. Contributions require explicit agreement permitting commercial use and future relicensing. 许可说明：[LICENSING.md](LICENSING.md)。授权联系：**cary.nexilume@outlook.com**。
