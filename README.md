@@ -6,7 +6,7 @@
 
 [![License: Nexus Community](https://img.shields.io/badge/License-Nexus_Community-17251d.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/Read-the_docs-b8ef73.svg)](docs/user/en/index.md)
-[![Cite this software](https://img.shields.io/badge/Cite-this_software-e8e9e4.svg)](#citation)
+[![Cite the technical report](https://img.shields.io/badge/Cite-technical_report-e8e9e4.svg)](#citation)
 [![Repository checks](https://github.com/Nexilume-AI/nexus-openwrt/actions/workflows/ci.yml/badge.svg)](https://github.com/Nexilume-AI/nexus-openwrt/actions/workflows/ci.yml)
 
 `OpenWrt` · `LuCI` · `Edge routing`
@@ -92,14 +92,20 @@ Follow [SECURITY.md](SECURITY.md) for security reports. Release checks and CI ar
 
 ## Citation
 
-If this software helps your work, cite the repository and record the exact release or commit you used. [CITATION.cff](CITATION.cff) provides machine-readable software metadata; this is a **software citation**, not a claim of a peer-reviewed paper or DOI.
+If Nexus supports your research or engineering work, please cite the technical report below, rather than the software repository. [CITATION.cff](CITATION.cff) provides the same report metadata through `preferred-citation`.
+
+Nexilume Research. *Nexus: Operating AI Agents Beyond the Cloud*. Technical Report NX-SYS-2026-001, v0.56-E3, September 2026. Research Draft.
 
 ```bibtex
-@misc{nexus_openwrt,
-  author       = {{Nexus contributors}},
-  title        = {Nexus OpenWrt},
-  howpublished = {\url{https://github.com/Nexilume-AI/nexus-openwrt}},
-  note         = {Software; specify the release or commit used}
+@techreport{nexilume2026nexus,
+  author      = {{Nexilume Research}},
+  title       = {{Nexus}: Operating {AI} Agents Beyond the Cloud},
+  institution = {Nexilume Research},
+  type        = {Technical Report},
+  number      = {NX-SYS-2026-001},
+  year        = {2026},
+  month       = sep,
+  note        = {Version v0.56-E3; Research Draft}
 }
 ```
 

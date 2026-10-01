@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "Please cite this repository and record the release or commit used."
+message: "Please cite the Nexus technical report in preferred-citation, rather than this software repository."
 type: software
 title: "Nexus OpenWrt"
 authors:
@@ -11,3 +11,15 @@ keywords:
   - "OpenWrt"
   - "LuCI"
   - "Edge routing"
+preferred-citation:
+  type: report
+  title: 'Nexus: Operating AI Agents Beyond the Cloud'
+  authors:
+  - name: Nexilume Research
+  institution:
+    name: Nexilume Research
+  number: NX-SYS-2026-001
+  version: v0.56-E3
+  year: 2026
+  month: 9
+  notes: Research Draft
