@@ -11,7 +11,7 @@
 
 `OpenWrt` · `LuCI` · `Edge routing`
 
-**English** · [简体中文](README_zh.md)
+**English** · [Chinese](README_zh.md)
 
 [Highlights](#highlights) · [Quick start](#quick-start) · [Documentation](#documentation) · [Ecosystem](#ecosystem) · [Contributing](#contributing) · [Citation](#citation)
 
@@ -60,13 +60,13 @@ Peer transport and permissions must work before cross-router calls succeed. Clou
 
 ## Documentation
 
-| Goal | English | 简体中文 |
+| Goal | English | Chinese |
 | --- | --- | --- |
-| Find the right guide | [Manual](docs/user/en/index.md) | [手册](docs/user/zh/index.md) |
-| Build and install packages | [Install](docs/user/en/getting-started/install.md) | [安装](docs/user/zh/getting-started/install.md) |
-| Call across two routers | [Tutorial](docs/user/en/tutorials/two-router.md) | [双路由教程](docs/user/zh/tutorials/two-router.md) |
+| Find the right guide | [Manual](docs/user/en/index.md) | [Manual](docs/user/zh/index.md) |
+| Build and install packages | [Install](docs/user/en/getting-started/install.md) | [Install](docs/user/zh/getting-started/install.md) |
+| Call across two routers | [Tutorial](docs/user/en/tutorials/two-router.md) | [Tutorial](docs/user/zh/tutorials/two-router.md) |
 | Understand Cloud Relay | [Guide](docs/user/en/guides/cloud-relay.md) | [Cloud Relay](docs/user/zh/guides/cloud-relay.md) |
-| Configure optional seed roles | [Router roles](docs/user/en/guides/router-roles.md) | [路由器角色](docs/user/zh/guides/router-roles.md) |
+| Configure optional seed roles | [Router roles](docs/user/en/guides/router-roles.md) | [Router roles](docs/user/zh/guides/router-roles.md) |
 
 For desktop Hyper-V setup see [desktop deployment](deploy/desktop/README.md) and [clean image builds](deploy/desktop/BUILD.md). For exact host-test commands and package caveats, see [build and validation reference](README_GUIDE.md). Track changes in [CHANGELOG.md](CHANGELOG.md).
 
@@ -107,6 +107,6 @@ If this software helps your work, cite the repository and record the exact relea
 
 Nexus-authored source is distributed under [Nexus Community License 1.0](LICENSE). Third-party components retain their own licenses and notices. In particular, this is not a claim that an entire OpenWrt firmware image is Apache-2.0-only; see [NOTICE](NOTICE) and [THIRD_PARTY.md](THIRD_PARTY.md). Documentation does not grant rights to separately distributed Enterprise implementation.
 
-### Licensing conditions / 许可条件
+### Licensing conditions
 
-Source-available, not unmodified Apache-2.0 or OSI-approved open source. Multi-tenant service operation and removal of existing Nexus UI branding require prior written authorization. Earlier Apache-2.0 grants and third-party licenses remain unchanged. Contributions require explicit agreement permitting commercial use and future relicensing. 许可说明：[LICENSING.md](LICENSING.md)。授权联系：**cary.nexilume@outlook.com**。
+Source-available, not unmodified Apache-2.0 or OSI-approved open source. Multi-tenant service operation and removal of existing Nexus UI branding require prior written authorization. Earlier Apache-2.0 grants and third-party licenses remain unchanged. Contributions require explicit agreement permitting commercial use and future relicensing. See [LICENSING.md](LICENSING.md). Authorization contact: **cary.nexilume@outlook.com**.
