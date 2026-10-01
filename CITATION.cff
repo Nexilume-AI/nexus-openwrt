@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "Please cite this repository and record the release or commit used."
+type: software
+title: "Nexus OpenWrt"
+authors:
+  - name: "Nexus contributors"
+repository-code: "https://github.com/Nexilume-AI/nexus-openwrt"
+url: "https://github.com/Nexilume-AI/nexus-openwrt"
+license: Apache-2.0
+keywords:
+  - "OpenWrt"
+  - "LuCI"
+  - "Edge routing"

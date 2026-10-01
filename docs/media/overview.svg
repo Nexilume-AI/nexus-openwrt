@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+<title id="title">Nexus OpenWrt workflow</title>
+<desc id="desc">Local Agents. Enable Agent services. Register SDK capabilities Then: Nexus OpenWrt. Discover and select routes. Inspect the LuCI workspace Then: Peers or Cloud. Configured peer transport. Optional Cloud enrollment. This is a workflow illustration, not a product screenshot.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#65806e" stroke-width="1.5"/></marker></defs>
+<rect width="1120" height="560" rx="20" fill="#f6f7f2"/>
+<rect x="1" y="1" width="1118" height="558" rx="20" fill="none" stroke="#d8dfd4"/>
+<g font-family="Segoe UI, Arial, sans-serif">
+<rect x="40" y="36" width="36" height="36" rx="10" fill="#182a20"/><path d="M50 61 V47 L66 61 V47" fill="none" stroke="#c7f58b" stroke-width="3"/>
+<text x="90" y="59" fill="#294634" font-size="16" font-weight="700" letter-spacing="2">NEXUS / OPEN SOURCE</text>
+<text x="40" y="128" fill="#14271c" font-size="35" font-weight="700">Nexus OpenWrt</text>
+<text x="40" y="163" fill="#516358" font-size="19">Give your Agents a network.</text>
+<rect x="40" y="218" width="332" height="218" rx="14" fill="#fff" stroke="#d5dfd1"/>
+<rect x="60" y="240" width="150" height="28" rx="14" fill="#e4f5d2"/>
+<text x="73" y="259" fill="#355728" font-size="13" font-weight="700">01 / REGISTER</text>
+<text x="62" y="313" fill="#182a20" font-size="23" font-weight="700">Local Agents</text>
+<text x="62" y="352" fill="#516358" font-size="17">Enable Agent services</text>
+<text x="62" y="381" fill="#516358" font-size="17">Register SDK capabilities</text>
+<rect x="394" y="218" width="332" height="218" rx="14" fill="#fff" stroke="#d5dfd1"/>
+<rect x="414" y="240" width="150" height="28" rx="14" fill="#e4f5d2"/>
+<text x="427" y="259" fill="#355728" font-size="13" font-weight="700">02 / ROUTE</text>
+<text x="416" y="313" fill="#182a20" font-size="23" font-weight="700">Nexus OpenWrt</text>
+<text x="416" y="352" fill="#516358" font-size="17">Discover and select routes</text>
+<text x="416" y="381" fill="#516358" font-size="17">Inspect the LuCI workspace</text>
+<rect x="748" y="218" width="332" height="218" rx="14" fill="#fff" stroke="#d5dfd1"/>
+<rect x="768" y="240" width="150" height="28" rx="14" fill="#e4f5d2"/>
+<text x="781" y="259" fill="#355728" font-size="13" font-weight="700">03 / REACH</text>
+<text x="770" y="313" fill="#182a20" font-size="23" font-weight="700">Peers or Cloud</text>
+<text x="770" y="352" fill="#516358" font-size="17">Configured peer transport</text>
+<text x="770" y="381" fill="#516358" font-size="17">Optional Cloud enrollment</text>
+<path d="M375 327 H391" fill="none" stroke="#65806e" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M729 327 H745" fill="none" stroke="#65806e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="40" y="487" fill="#294634" font-size="17">Local and distributed routing · Connectivity must be configured</text>
+<text x="40" y="521" fill="#68756b" font-size="13">WORKFLOW ILLUSTRATION / NOT A PRODUCT SCREENSHOT</text>
+</g></svg>
