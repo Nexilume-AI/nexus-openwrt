@@ -4,7 +4,7 @@ PKG_NAME:=agent-gw
 PKG_VERSION:=0.22.0
 PKG_RELEASE:=26
 
-PKG_LICENSE:=LicenseRef-Nexus-Community-1.0
+PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 

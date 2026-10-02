@@ -59,7 +59,7 @@ ImageBuilder success alone is insufficient to mark the release ready.
   record actual assigned addresses/prefixes and external reachability.
 - Confirm package versions and source revisions. Retain firmware/package
   manifests, checksums, build configuration, upstream license notices and the
-  corresponding sources required by their licenses. Nexus Community License 1.0 covers Nexus's
+  corresponding sources required by their licenses. Apache License 2.0 (modified) covers Nexus's
   code as stated in `../../NOTICE`; it does not relicense OpenWrt firmware.
 - Exclude root passwords, SSH host keys, device identity/realm state, TLS private
   keys, Relay tickets, Cloud enrollment and logs. Do not copy local `evidence`,

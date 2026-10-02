@@ -11,7 +11,7 @@
 
 ## Contribution licensing
 
-Nexus-authored changes are distributed under the Nexus Community License 1.0.
+Nexus-authored changes are distributed under the Apache License 2.0 (modified).
 Read [LICENSE](LICENSE), [LICENSING.md](LICENSING.md) and the
 [Nexus Contributor License Agreement](CONTRIBUTOR_LICENSE_AGREEMENT.md).
 Every contributing author must explicitly accept that agreement for their PR

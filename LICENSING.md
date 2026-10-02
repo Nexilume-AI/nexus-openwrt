@@ -1,9 +1,15 @@
 # Nexus licensing / Nexus 许可说明
 
-Current Nexus-authored releases carrying this notice use the **Nexus Community
-License 1.0** (`LicenseRef-Nexus-Community-1.0`); read [LICENSE](LICENSE) for the
+Nexus is licensed under a **modified version of the Apache License 2.0, with
+additional conditions**
+(`LicenseRef-Nexus-Additional-Terms-1.0`); read [LICENSE](LICENSE) for the
 complete, authoritative English terms. This is **source-available**, not plain
 Apache-2.0 or OSI-approved open source.
+
+The LICENSE heading is **Open Source License**. Apart from its specific
+additional conditions, all other rights and restrictions follow the Apache
+License 2.0. Historical artifacts keep the license and identifier supplied with
+their releases.
 
 | Use | Community terms |
 | --- | --- |
@@ -29,6 +35,8 @@ replaced under the same version number.
 
 ## 中文说明（以英文许可证为准）
 
+- LICENSE 标题为“Open Source License”，正文说明采用“Apache License 2.0 的修改版，并附加以下条件”。
+- 除明确列出的附加条件外，其他权利与限制遵循 Apache License 2.0。
 - 个人使用、评估及单租户自托管允许，包括单租户商业使用。
 - 为多个独立租户运营服务，无论收费与否，都需要项目方事先书面商业授权。
 - 不得未经授权移除、替换、遮挡或显著弱化 Nexus 界面已有品牌和版权标识。

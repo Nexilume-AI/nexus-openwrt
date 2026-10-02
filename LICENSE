@@ -1,14 +1,19 @@
-Nexus Community License, Version 1.0
-SPDX-License-Identifier: LicenseRef-Nexus-Community-1.0
+# Open Source License
+
+Nexus is licensed under a modified version of the Apache License 2.0, with the
+following additional conditions:
+
+Additional conditions version: 1.0
+SPDX-License-Identifier: LicenseRef-Nexus-Additional-Terms-1.0
 
 Licensor: the Nexus project copyright owner granting rights in this Work,
 contactable at cary.nexilume@outlook.com. This designation does not assert
 ownership of third-party code or of contributions without an appropriate grant.
 
-This is a source-available license, not the unmodified Apache License 2.0 and
-not an OSI-approved open-source license. The Apache License 2.0 text reproduced
-below is incorporated subject to the following additional conditions. These
-conditions prevail for the Nexus-authored Work where they differ from that text.
+Apart from the specific conditions below, all other rights and restrictions
+follow the Apache License 2.0. Its complete text is reproduced below. These
+additional conditions prevail for the Nexus-authored Work where they differ
+from that text.
 
 1. Permitted use and multi-tenant operation
 

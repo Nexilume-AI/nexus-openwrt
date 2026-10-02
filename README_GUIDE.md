@@ -66,8 +66,8 @@ These tests cover the host routing core, configuration contracts and Relay/Direc
 
 [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [CHANGELOG](CHANGELOG.md) · [Release checks](RELEASING.md)
 
-Nexus-authored code uses [Nexus Community License 1.0](LICENSE); see [NOTICE](NOTICE) for its scope. Third-party code and build dependencies retain their original licenses; see [THIRD_PARTY](THIRD_PARTY.md). In particular, the Node OpenWrt build recipe retains GPL v2: do not label an entire OpenWrt firmware image as Apache-2.0-only. Per-file source SHA-256 hashes are recorded in `SOURCE-MANIFEST.json`. This manifest provides export traceability, not a signature or security-audit certificate.
+Nexus-authored code uses [Apache License 2.0 (modified)](LICENSE); see [NOTICE](NOTICE) for its scope. Third-party code and build dependencies retain their original licenses; see [THIRD_PARTY](THIRD_PARTY.md). In particular, the Node OpenWrt build recipe retains GPL v2: do not label an entire OpenWrt firmware image as Apache-2.0-only. Per-file source SHA-256 hashes are recorded in `SOURCE-MANIFEST.json`. This manifest provides export traceability, not a signature or security-audit certificate.
 
 ### Licensing conditions
 
-Source-available, not unmodified Apache-2.0 or OSI-approved open source. Multi-tenant service operation and removal of existing Nexus UI branding require prior written authorization. Earlier Apache-2.0 grants and third-party licenses remain unchanged. Contributions require explicit agreement permitting commercial use and future relicensing. See [LICENSING.md](LICENSING.md). Authorization contact: **cary.nexilume@outlook.com**.
+Nexus is licensed under a modified version of the Apache License 2.0, with the following additional conditions. Multi-tenant service operation and removal of existing Nexus UI branding require prior written authorization. Earlier Apache-2.0 grants and third-party licenses remain unchanged. Contributions require explicit agreement permitting commercial use and future relicensing. See [LICENSING.md](LICENSING.md). Authorization contact: **cary.nexilume@outlook.com**.

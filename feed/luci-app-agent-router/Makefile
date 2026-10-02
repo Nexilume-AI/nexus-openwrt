@@ -6,7 +6,7 @@ LUCI_PKGARCH:=all
 
 PKG_VERSION:=3.1.0
 PKG_RELEASE:=22
-PKG_LICENSE:=LicenseRef-Nexus-Community-1.0
+PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
 
 define Package/luci-app-agent-router/conffiles

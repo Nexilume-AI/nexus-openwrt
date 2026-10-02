@@ -66,8 +66,8 @@ python3 -m unittest discover -s deploy/desktop -p test_bundle.py
 
 [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [CHANGELOG](CHANGELOG.md) · [发布检查](RELEASING.md)
 
-Nexus 自有代码采用 [Nexus Community License 1.0](LICENSE)，具体边界见 [NOTICE](NOTICE)。第三方代码和构建依赖保留原许可证，见 [THIRD_PARTY](THIRD_PARTY.md)。特别是 Node 的 OpenWrt 构建配方保留 GPL v2，不能把整张 OpenWrt 固件标为仅 Apache-2.0。源码包的逐文件 SHA-256 在 `SOURCE-MANIFEST.json`；该清单用于追溯导出，不是签名或安全审计证明。
+Nexus 自有代码采用 [Apache License 2.0 (modified)](LICENSE)，具体边界见 [NOTICE](NOTICE)。第三方代码和构建依赖保留原许可证，见 [THIRD_PARTY](THIRD_PARTY.md)。特别是 Node 的 OpenWrt 构建配方保留 GPL v2，不能把整张 OpenWrt 固件标为仅 Apache-2.0。源码包的逐文件 SHA-256 在 `SOURCE-MANIFEST.json`；该清单用于追溯导出，不是签名或安全审计证明。
 
 ### 许可条件
 
-本项目采用源码可用许可，并非未经修改的 Apache-2.0 或经 OSI 批准的开源许可。多租户服务运营及移除现有 Nexus 界面品牌标识须事先取得书面授权。此前的 Apache-2.0 授权和第三方许可证保持不变。贡献者须明确同意允许商业使用及未来重新许可的贡献协议。许可说明：[LICENSING.md](LICENSING.md)。授权联系：**cary.nexilume@outlook.com**。
+Nexus 采用 Apache License 2.0 的修改版，并附加以下条件。多租户服务运营及移除现有 Nexus 界面品牌标识须事先取得书面授权。此前的 Apache-2.0 授权和第三方许可证保持不变。贡献者须明确同意允许商业使用及未来重新许可的贡献协议。许可说明：[LICENSING.md](LICENSING.md)。授权联系：**cary.nexilume@outlook.com**。
