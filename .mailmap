@@ -1,3 +1,2 @@
-# Canonical Git display identity; legacy aliases remain for attribution.
-# Map only the owner's verified historical emails. Leave other contributors unchanged.
-Cary Chang <100103663+carychang@users.noreply.github.com> <894076259@qq.com>
+# Public commits use GitHub no-reply addresses.
+# Do not publish private email aliases. Preserve third-party attribution.
