@@ -77,7 +77,7 @@ Nexus 自有代码采用 Apache License 2.0 (modified)；OpenWrt 固件和 Node 
 
 | 项目 | 职责 |
 | --- | --- |
-| [Nexus Cloud](https://github.com/Nexilume-AI/nexus-cloud-community) | Server、Web Console 与配套 Cloud Relay |
+| [Nexus Cloud](https://github.com/Nexilume-AI/nexus-cloud) | Server、Web Console 与配套 Cloud Relay |
 | [Python SDK](https://github.com/Nexilume-AI/nexus-agent-sdk-python) | Agent 应用与主动出站的 Computer Runtime |
 | [OpenWrt](https://github.com/Nexilume-AI/nexus-openwrt) | 边缘注册、发现与能力路由 |
 | [Mobile](https://github.com/Nexilume-AI/nexus-mobile) | 已授权的 Android 设备接入 |
