@@ -97,12 +97,12 @@ Follow [SECURITY.md](SECURITY.md) for security reports. Release checks and CI ar
 
 If Nexus supports your research or engineering work, please cite the technical report below, rather than the software repository. [CITATION.cff](CITATION.cff) provides the same report metadata through `preferred-citation`.
 
-Nexilume Research. *Nexus: Operating AI Agents Beyond the Cloud*. Technical Report NX-SYS-2026-001, September 2026.
+Nexilume Research. *Nexus: An Execution Fabric for AI Agents Across Cloud, Edge, and Devices*. Technical Report NX-SYS-2026-001, September 2026.
 
 ```bibtex
 @techreport{nexilume2026nexus,
   author      = {{Nexilume Research}},
-  title       = {{Nexus}: Operating {AI} Agents Beyond the Cloud},
+  title       = {{Nexus}: An Execution Fabric for {AI} Agents Across Cloud, Edge, and Devices},
   institution = {Nexilume Research},
   type        = {Technical Report},
   number      = {NX-SYS-2026-001},

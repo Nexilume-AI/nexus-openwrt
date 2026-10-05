@@ -13,7 +13,7 @@ keywords:
   - "Edge routing"
 preferred-citation:
   type: report
-  title: 'Nexus: Operating AI Agents Beyond the Cloud'
+  title: 'Nexus: An Execution Fabric for AI Agents Across Cloud, Edge, and Devices'
   authors:
   - name: Nexilume Research
   institution:
