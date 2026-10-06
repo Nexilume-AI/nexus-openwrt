@@ -1,34 +1,88 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
-<title id="title">Nexus OpenWrt workflow</title>
-<desc id="desc">Local Agents. Enable Agent services. Register SDK capabilities Then: Nexus OpenWrt. Discover and select routes. Inspect the LuCI workspace Then: Peers or Cloud. Configured peer transport. Optional Cloud enrollment. This is a workflow illustration, not a product screenshot.</desc>
-<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#65806e" stroke-width="1.5"/></marker></defs>
-<rect width="1120" height="560" rx="20" fill="#f6f7f2"/>
-<rect x="1" y="1" width="1118" height="558" rx="20" fill="none" stroke="#d8dfd4"/>
-<g font-family="Segoe UI, Arial, sans-serif">
-<rect x="40" y="36" width="36" height="36" rx="10" fill="#182a20"/><path d="M50 61 V47 L66 61 V47" fill="none" stroke="#c7f58b" stroke-width="3"/>
-<text x="90" y="59" fill="#294634" font-size="16" font-weight="700" letter-spacing="2">NEXUS / OPEN SOURCE</text>
-<text x="40" y="128" fill="#14271c" font-size="35" font-weight="700">Nexus OpenWrt</text>
-<text x="40" y="163" fill="#516358" font-size="19">Give your Agents a network.</text>
-<rect x="40" y="218" width="332" height="218" rx="14" fill="#fff" stroke="#d5dfd1"/>
-<rect x="60" y="240" width="150" height="28" rx="14" fill="#e4f5d2"/>
-<text x="73" y="259" fill="#355728" font-size="13" font-weight="700">01 / REGISTER</text>
-<text x="62" y="313" fill="#182a20" font-size="23" font-weight="700">Local Agents</text>
-<text x="62" y="352" fill="#516358" font-size="17">Enable Agent services</text>
-<text x="62" y="381" fill="#516358" font-size="17">Register SDK capabilities</text>
-<rect x="394" y="218" width="332" height="218" rx="14" fill="#fff" stroke="#d5dfd1"/>
-<rect x="414" y="240" width="150" height="28" rx="14" fill="#e4f5d2"/>
-<text x="427" y="259" fill="#355728" font-size="13" font-weight="700">02 / ROUTE</text>
-<text x="416" y="313" fill="#182a20" font-size="23" font-weight="700">Nexus OpenWrt</text>
-<text x="416" y="352" fill="#516358" font-size="17">Discover and select routes</text>
-<text x="416" y="381" fill="#516358" font-size="17">Inspect the LuCI workspace</text>
-<rect x="748" y="218" width="332" height="218" rx="14" fill="#fff" stroke="#d5dfd1"/>
-<rect x="768" y="240" width="150" height="28" rx="14" fill="#e4f5d2"/>
-<text x="781" y="259" fill="#355728" font-size="13" font-weight="700">03 / REACH</text>
-<text x="770" y="313" fill="#182a20" font-size="23" font-weight="700">Peers or Cloud</text>
-<text x="770" y="352" fill="#516358" font-size="17">Configured peer transport</text>
-<text x="770" y="381" fill="#516358" font-size="17">Optional Cloud enrollment</text>
-<path d="M375 327 H391" fill="none" stroke="#65806e" stroke-width="2" marker-end="url(#arrow)"/>
-<path d="M729 327 H745" fill="none" stroke="#65806e" stroke-width="2" marker-end="url(#arrow)"/>
-<text x="40" y="487" fill="#294634" font-size="17">Local and distributed routing · Connectivity must be configured</text>
-<text x="40" y="521" fill="#68756b" font-size="13">WORKFLOW ILLUSTRATION / NOT A PRODUCT SCREENSHOT</text>
-</g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="736" viewBox="0 0 1240 736" role="img" aria-labelledby="title desc">
+  <title id="title">Call a capability, not a remote endpoint</title>
+  <desc id="desc">A cross-router capability-routing example. An Agent registers demo.echo with its hosting router and renews its lease. That router advertises and withdraws the capability route to a configured peer. A caller sends the explicit intent demo.echo to its entry router, which applies routing policy, selects the peer route and forwards the call to the hosting router and Agent. Dashed lines show registration and route announcements; solid arrows show invocation. Callers still configure a router address, identity and policy checks still apply, and Cloud enrollment is optional. This example does not represent natural-language routing or full MCP passthrough.</desc>
+  <defs>
+    <marker id="invoke-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#294634" stroke-width="1.7"/>
+    </marker>
+    <marker id="route-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#65806e" stroke-width="1.5"/>
+    </marker>
+  </defs>
+  <rect width="1240" height="736" rx="18" fill="#f6f7f2"/>
+  <rect x="1" y="1" width="1238" height="734" rx="18" fill="none" stroke="#d8dfd4"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <text x="40" y="48" fill="#294634" font-size="16" font-weight="700" letter-spacing="2">NEXUS OPENWRT / CAPABILITY ROUTING</text>
+    <text x="40" y="100" fill="#14271c" font-size="36" font-weight="700">Call a capability, not a remote endpoint</text>
+    <text x="40" y="135" fill="#516358" font-size="20">One registered capability. A call through another router.</text>
+
+    <path d="M40 184 H76" stroke="#65806e" stroke-width="2" stroke-dasharray="6 5"/>
+    <text x="88" y="190" fill="#516358" font-size="17">Capability announcements</text>
+    <path d="M40 216 H76" stroke="#294634" stroke-width="2.5" marker-end="url(#invoke-arrow)"/>
+    <text x="88" y="222" fill="#294634" font-size="17">Invocation</text>
+
+    <g fill="none" stroke="#65806e" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#route-arrow)">
+      <path d="M1086 282 V228 H804 V282"/>
+      <path d="M752 282 V228 H450 V282"/>
+    </g>
+    <text x="945" y="207" text-anchor="middle" fill="#516358" font-size="18">Register + renew</text>
+    <text x="601" y="207" text-anchor="middle" fill="#516358" font-size="18">Advertise / withdraw</text>
+
+    <rect x="40" y="282" width="200" height="202" rx="12" fill="#fff" stroke="#d5dfd1"/>
+    <rect x="332" y="282" width="236" height="202" rx="12" fill="#182a20"/>
+    <rect x="660" y="282" width="236" height="202" rx="12" fill="#182a20"/>
+    <rect x="988" y="282" width="200" height="202" rx="12" fill="#fff" stroke="#d5dfd1"/>
+
+    <g text-anchor="middle" font-size="23" font-weight="700">
+      <text x="140" y="323" fill="#182a20">Caller</text>
+      <text x="450" y="323" fill="#fff">Entry router</text>
+      <text x="778" y="323" fill="#fff">Hosting router</text>
+      <text x="1088" y="323" fill="#182a20">Agent</text>
+    </g>
+    <g text-anchor="middle" font-size="18">
+      <text x="140" y="359" fill="#516358">intent</text>
+      <text x="450" y="359" fill="#d7e6d1">Match capability</text>
+      <text x="450" y="389" fill="#d7e6d1">Apply route policy</text>
+      <text x="778" y="359" fill="#d7e6d1">Local registration</text>
+      <text x="1088" y="359" fill="#516358">Implements</text>
+    </g>
+    <g text-anchor="middle" font-family="Consolas, monospace" font-size="21" font-weight="700">
+      <text x="140" y="391" fill="#294634">demo.echo</text>
+      <text x="778" y="391" fill="#c7f58b">demo.echo</text>
+      <text x="1088" y="391" fill="#294634">demo.echo</text>
+    </g>
+    <g text-anchor="middle" font-size="17">
+      <text x="140" y="453" fill="#516358">No remote Agent URL</text>
+      <text x="450" y="453" fill="#c7f58b">Select next hop</text>
+      <text x="778" y="453" fill="#c7f58b">Forward to backend</text>
+      <text x="1088" y="453" fill="#516358">Receives payload</text>
+    </g>
+    <g fill="none" stroke="#294634" stroke-width="2.5" marker-end="url(#invoke-arrow)">
+      <path d="M240 417 H332"/>
+      <path d="M568 417 H660"/>
+      <path d="M896 417 H988"/>
+    </g>
+    <g text-anchor="middle" fill="#294634" font-size="16">
+      <text x="286" y="399">invoke</text>
+      <text x="614" y="399">forward</text>
+      <text x="942" y="399">call</text>
+    </g>
+
+    <path d="M40 526 H1200" stroke="#d5dfd1"/>
+    <g fill="#182a20" font-size="21" font-weight="700">
+      <text x="40" y="563">01  Stable capability ID</text>
+      <text x="436" y="563">02  Distributed discovery</text>
+      <text x="832" y="563">03  Lease-bound routes</text>
+    </g>
+    <g fill="#516358" font-size="18">
+      <text x="40" y="595">Keep your router address,</text>
+      <text x="40" y="621">not a list of remote Agent URLs.</text>
+      <text x="436" y="595">Routers exchange registered</text>
+      <text x="436" y="621">capabilities with configured peers.</text>
+      <text x="832" y="595">Renew to stay available;</text>
+      <text x="832" y="621">withdrawal or expiry removes routes.</text>
+    </g>
+    <text x="40" y="678" fill="#294634" font-size="18">Direct / Relay provides connectivity. Identity, policy and network requirements still apply.</text>
+    <text x="40" y="709" fill="#516358" font-size="17">Cloud enrollment is optional. Simplified capability-routing example, not a product screenshot.</text>
+  </g>
+</svg>

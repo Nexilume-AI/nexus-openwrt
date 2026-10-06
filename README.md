@@ -14,7 +14,7 @@
 
 **English** · [Chinese](README_zh.md)
 
-[Highlights](#highlights) · [Quick start](#quick-start) · [Documentation](#documentation) · [Ecosystem](#ecosystem) · [Contributing](#contributing) · [Citation](#citation)
+[Motivation](#motivation) · [Highlights](#highlights) · [Quick start](#quick-start) · [Documentation](#documentation) · [Ecosystem](#ecosystem) · [Contributing](#contributing) · [Citation](#citation)
 
 </div>
 
@@ -22,9 +22,37 @@
 
 Agent registration, discovery and capability routing on OpenWrt, with a LuCI workspace, Cloud connectivity and optional self-hosted Relay / Directory.
 
-![Nexus OpenWrt: illustrated workflow](docs/media/overview.svg)
+## Motivation
 
-*Workflow illustration, not a product screenshot. Connections require the setup and authorization described below.*
+Agents can run on personal computers, home servers, edge devices or in the cloud,
+but they often live on different networks. Even when those networks are connected,
+callers still need to know each Agent's address, what it can do and how to reach it
+when an endpoint changes or a connection drops.
+
+**Discover and invoke agents by capability across devices and networks, without
+maintaining every endpoint and connection by hand.**
+
+![An Agent registers demo.echo, routers advertise its capability route, and a caller invokes through a peer router](docs/media/overview.svg)
+
+*Simplified capability-routing example, not a product screenshot. The caller still configures its router address and requests an explicit capability ID. Network connectivity and authorization are required; Cloud enrollment is optional.*
+
+Nexus OpenWrt turns routers into connection points for an Agent network. Local
+Agents register their capabilities with a nearby router; routers exchange
+capability routes within a configured Mesh and forward calls over available direct
+or Relay paths. Applications request capabilities while the routing layer handles
+the underlying connections.
+
+Nexus OpenWrt can form an independent network or connect to
+[Nexus Cloud](https://github.com/Nexilume-AI/nexus-cloud), bringing edge Agents into
+a unified management, discovery and user-interaction workflow. Cloud provides a
+unified entry point; OpenWrt extends reachability to the edge. Cloud enrollment is
+optional, not a prerequisite for local or cross-router collaboration.
+
+### Why not just connect directly?
+
+1. **Only two or three Agents with stable endpoints?** Direct connections are usually simpler.
+2. **All Agents in one centrally managed environment?** A centralized Gateway is usually easier to manage.
+3. **Agents spread across homes, offices and edge devices, frequently going online and offline?** Nexus OpenWrt lets callers discover and invoke Agents by capability, without maintaining each endpoint and connection by hand.
 
 ## Highlights
 
