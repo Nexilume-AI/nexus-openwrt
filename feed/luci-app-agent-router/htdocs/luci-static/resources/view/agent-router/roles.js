@@ -5,7 +5,11 @@
 'require uci';
 'require fs';
 'require ui';
+'require poll';
+'require dom';
 'require agent-router.mode as mode';
+'require agent-router.mesh-setup as meshSetup';
+'require agent-router.directory-relays as directoryRelays';
 
 const callService = rpc.declare({ object: 'service', method: 'list', params: [ 'name' ], expect: {} });
 
@@ -24,10 +28,20 @@ const ROLE_FILES = {
 	}
 };
 
-function serviceRunning(payload, name) {
+function serviceState(payload, name) {
+	if (payload == null) return { unknown: true, running: false };
 	const service = (payload || {})[name] || {};
-	const instances = service.instances || {};
-	return Object.keys(instances).some(key => !!instances[key].running);
+	const instances = Object.values(service.instances || {});
+	const running = instances.some(instance => !!instance.running);
+	const retrying = instances.find(instance => !instance.running && instance.respawn);
+	const failed = instances.find(instance => Number.isInteger(instance.exit_code) && instance.exit_code !== 0);
+	return {
+		unknown: false,
+		running,
+		retrying: !running && !!retrying,
+		retrySeconds: retrying ? Number(retrying.respawn.timeout) || 30 : 0,
+		exitCode: !running && failed ? failed.exit_code : null
+	};
 }
 
 function exists(result) {
@@ -53,31 +67,25 @@ function savedMode() {
 	return 'node';
 }
 
-function directoryRuntimeConfig(content) {
-	try {
-		const parsed = JSON.parse(String(content || ''));
-		const port = Number(parsed.port);
-		return {
-			listen: String(parsed.listen || ''),
-			port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : 8443
-		};
-	}
-	catch (e) {
-		return { listen: '', port: 8443 };
-	}
-}
-
 function roleStatus(role, wanted, state) {
+	if (state.unknown)
+		return { label: _('Status unavailable'), tone: 'warn', next: _('Could not refresh service status. Retrying automatically; no configuration was changed.') };
 	if (!wanted && state.running)
 		return { label: _('Running until Save & Apply'), tone: 'warn', next: _('Apply the selected mode to stop this service.') };
 	if (!wanted)
 		return { label: _('Not enabled'), tone: 'info', next: '' };
 	if (!state.installed)
 		return { label: _('Component missing'), tone: 'down', next: _('Install %s.').format(ROLE_FILES[role].package) };
-	if (!state.configured)
-		return { label: _('Configuration missing'), tone: 'warn', next: _('Add the role configuration file, then apply again.') };
+	if (!state.running && !state.configured && !state.customConfig && !state.retrying)
+		return { label: _('Configuration missing'), tone: 'warn', next: _('Use Open Mesh setup to initialize Relay and Directory together. No manual JSON configuration is needed.') };
+	if (state.retrying)
+		return { label: _('Recovering'), tone: 'warn', next: state.exitCode != null ?
+			_('Last process exit: %s. Automatic retry every %s seconds. If this persists, check the role configuration, certificate permissions and system log.').format(state.exitCode, state.retrySeconds) :
+			_('Automatic restart pending (retry interval: %s seconds).').format(state.retrySeconds) };
+	if (!state.running && state.exitCode != null)
+		return { label: _('Recovery stopped'), tone: 'down', next: _('The process exited with code %s and automatic recovery is not armed. Save & Apply, then check the system log.').format(state.exitCode) };
 	if (!state.running)
-		return { label: _('Ready to start'), tone: 'warn', next: _('Save & Apply, then check the system log if it remains stopped.') };
+		return { label: _('Stopped'), tone: 'warn', next: _('No active supervisor. Save & Apply; check storage permissions and the system log if startup fails.') };
 	return { label: _('Ready'), tone: 'up', next: _('Service is running with the saved role configuration.') };
 }
 
@@ -95,7 +103,7 @@ function roleCard(role, title, description, mode, state) {
 		fact(_('Component'), state.installed ? badge(_('Installed'), 'up') : badge(_('Not installed'), wanted ? 'down' : 'info')),
 		fact(_('Configuration'), state.customConfig ? badge(_('Custom file'), 'info') :
 			(state.configured ? badge(_('Default file found'), 'up') : badge(_('File missing'), wanted ? 'warn' : 'info'))),
-		fact(_('Runtime'), state.running ? badge(_('Running'), 'up') : badge(_('Stopped'), wanted ? 'warn' : 'info'))
+		fact(_('Runtime'), badge(state.unknown ? _('Status unavailable') : state.running ? _('Running') : state.retrying ? _('Recovering') : _('Stopped'), state.running ? 'up' : 'warn'))
 	]) : E([], []);
 
 	return E('div', { 'class': 'ar-role-row' + (wanted ? ' ar-role-row-enabled' : '') }, [
@@ -132,38 +140,8 @@ function roleSummary(mode, state) {
 	]);
 }
 
-function directoryConnectionGuide(mode, runtime) {
-	if (!selected(mode, 'directory')) return E([], []);
-	const hostname = String(uci.get('nexus_roles', 'directory', 'public_hostname') || '');
-	const port = String(uci.get('nexus_roles', 'directory', 'public_port') || runtime.port || 8443);
-	const endpoint = hostname ? 'https://' + hostname + ':' + port + '/v1/open-mesh/assignment' : '';
-
-	return E('section', { 'class': 'ar-role-endpoint' }, [
-		E('div', {}, [
-			E('h3', {}, _('Directory address for other routers')),
-			endpoint ? E('code', { 'class': 'ar-code-wrap' }, endpoint) :
-				E('span', { 'class': 'ar-muted' }, _('Add the public hostname in Advanced role configuration, then Save & Apply.'))
-		]),
-		E('div', { 'class': 'ar-role-listener' }, [
-			E('span', { 'class': 'ar-muted' }, _('Detected local listener')),
-			E('strong', {}, '%s:%s'.format(runtime.listen || '0.0.0.0', runtime.port))
-		])
-	]);
-}
-
 function openMeshClientGuide() {
-	return E('section', { 'class': 'ar-role-endpoint' }, [
-		E('div', {}, [
-			E('h3', {}, _('Connect this router to an Open Mesh Relay')),
-			E('p', { 'class': 'ar-muted' }, [
-				_('A managed seed connects automatically when Router network is enabled. To use a custom OpenWrt Directory seed, keep Node only and configure its assignment URL; the Directory selects the Relay automatically.')
-			])
-		]),
-		E('a', {
-			'class': 'btn cbi-button-action',
-			'href': L.url('admin/status/agent-router/developer/settings')
-		}, _('Configure a custom seed'))
-	]);
+	return meshSetup.render();
 }
 
 function modeMap() {
@@ -201,14 +179,6 @@ function directoryMap(runtime) {
 	m = new form.Map('nexus_roles', _('Directory'));
 	s = m.section(form.NamedSection, 'directory', 'role', _('Address shared with other routers'));
 	s.addremove = false;
-	o = s.option(form.Value, 'public_hostname', _('Public hostname'));
-	o.datatype = 'hostname';
-	o.placeholder = 'directory.example.com';
-	o.description = _('Use the hostname covered by the Directory TLS certificate.');
-	o = s.option(form.Value, 'public_port', _('Public port'));
-	o.datatype = 'port';
-	o.default = String(runtime.port);
-	o.description = _('External port reachable by other routers.');
 	o = s.option(form.Value, 'config_file', _('Configuration file'));
 	o.rmempty = false;
 	o.placeholder = ROLE_FILES.directory.config;
@@ -226,19 +196,18 @@ return view.extend({
 
 	load() {
 		return uci.load('nexus_roles').then(() => Promise.all([
-			callService(ROLE_FILES.relay.service).catch(() => ({})),
-			callService(ROLE_FILES.directory.service).catch(() => ({})),
+			callService(ROLE_FILES.relay.service).catch(() => null),
+			callService(ROLE_FILES.directory.service).catch(() => null),
 			fs.stat(ROLE_FILES.relay.init).catch(() => null),
 			fs.stat(ROLE_FILES.directory.init).catch(() => null),
 			fs.stat(ROLE_FILES.relay.config).catch(() => null),
-			fs.stat(ROLE_FILES.directory.config).catch(() => null),
-			fs.read(ROLE_FILES.directory.config).catch(() => '')
+			fs.stat(ROLE_FILES.directory.config).catch(() => null)
 		]));
 	},
 
 	render(status) {
 		const roleMode = savedMode();
-		const runtime = directoryRuntimeConfig(status[6]);
+		const runtime = {};
 		const relayConfig = uci.get('nexus_roles', 'relay', 'config_file') || ROLE_FILES.relay.config;
 		const directoryConfig = uci.get('nexus_roles', 'directory', 'config_file') || ROLE_FILES.directory.config;
 		const state = {
@@ -246,13 +215,13 @@ return view.extend({
 				installed: exists(status[2]),
 				configured: exists(status[4]),
 				customConfig: relayConfig !== ROLE_FILES.relay.config,
-				running: serviceRunning(status[0], ROLE_FILES.relay.service)
+				...serviceState(status[0], ROLE_FILES.relay.service)
 			},
 			directory: {
 				installed: exists(status[3]),
 				configured: exists(status[5]),
 				customConfig: directoryConfig !== ROLE_FILES.directory.config,
-				running: serviceRunning(status[1], ROLE_FILES.directory.service)
+				...serviceState(status[1], ROLE_FILES.directory.service)
 			}
 		};
 
@@ -261,18 +230,33 @@ return view.extend({
 				nodes[0].classList.add('ar-role-mode');
 				nodes[1].classList.add('ar-role-config-map');
 				nodes[2].classList.add('ar-role-config-map');
+				const summary = E('div', { 'aria-live': 'polite' }, [roleSummary(roleMode, state)]);
+				// Update only status, never re-render forms or overwrite unsaved edits.
+				poll.add(() => Promise.all([
+					callService(ROLE_FILES.relay.service).catch(() => null),
+					callService(ROLE_FILES.directory.service).catch(() => null),
+					fs.stat(ROLE_FILES.relay.config).catch(() => null),
+					fs.stat(ROLE_FILES.directory.config).catch(() => null)
+				]).then(current => {
+					const next = {};
+					['relay', 'directory'].forEach((role, index) => {
+						next[role] = Object.assign({}, state[role], serviceState(current[index], ROLE_FILES[role].service));
+						next[role].configured = exists(current[index + 2]);
+					});
+					dom.content(summary, roleSummary(roleMode, next));
+				}), 5);
 
 				return E([], [
 					E('link', { 'rel': 'stylesheet', 'href': L.resource('agent-router/agent-router.css') + '?v=#PKG_VERSION' }),
 					mode.render('developer'),
 					E('div', { 'class': 'ar-shell ar-roles-page' }, [
-						nodes[0],
 						openMeshClientGuide(),
-						roleSummary(roleMode, state),
-						directoryConnectionGuide(roleMode, runtime),
+						summary,
+						directoryRelays.render(),
 						E('details', { 'class': 'ar-advanced-panel ar-role-advanced' }, [
 							E('summary', {}, _('Advanced role configuration')),
 							E('p', { 'class': 'ar-muted' }, _('Only change these values when hosting Relay or Directory services on this router.')),
+							nodes[0],
 							E('div', { 'class': 'ar-role-advanced-grid' }, [ nodes[1], nodes[2] ])
 						])
 					])

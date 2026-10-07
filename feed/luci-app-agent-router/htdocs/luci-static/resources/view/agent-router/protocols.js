@@ -6,6 +6,7 @@
 'require ui';
 'require agent-router.mode as mode';
 
+const callOverview = rpc.declare({ object: 'nexus-agent-ui', method: 'overview', expect: {} });
 const callService = rpc.declare({ object: 'service', method: 'list', params: [ 'name' ], expect: {} });
 
 function serviceRunning(payload, name) {
@@ -14,73 +15,35 @@ function serviceRunning(payload, name) {
 	return Object.keys(instances).some(key => !!instances[key].running);
 }
 
-function savedJwtMode() {
-	const authMode = uci.get('agent_gateway', 'main', 'auth_mode');
-	if (authMode === 'none')
-		return 'none';
-	if (authMode !== 'jwt' && uci.get('agent_gateway', 'main', 'jwt_required') !== '1')
-		return 'none';
-	return uci.get('agent_gateway', 'main', 'jwt_jwks_file') ? 'jwks' : 'local';
+function cloudManagedAuthentication() {
+	return uci.get('agent_gateway', 'main', 'auth_mode') === 'jwt' &&
+		uci.get('agent_gateway', 'main', 'jwt_jwks_file') === '/etc/agent-gw/nexus-cloud-jwks.json' &&
+		!!uci.get('agent_gateway', 'main', 'jwt_issuer') &&
+		!!uci.get('agent_gateway', 'main', 'jwt_audience') &&
+		!!uci.get('agent_gateway', 'main', 'jwt_jwks_url');
 }
 
-function setGatewayDefault(name, value) {
-	if (!uci.get('agent_gateway', 'main', name))
-		uci.set('agent_gateway', 'main', name, value);
-}
-
-function conventionalJwksUrl(issuer) {
-	const base = String(issuer || '').replace(/\/+$/, '');
-	return base ? base + '/.well-known/jwks.json' : '';
-}
-
-function jwtModeOption(option) {
-	option.cfgvalue = savedJwtMode;
-	option.write = function(sectionId, value) {
-		if (value === 'none') {
-			uci.set('agent_gateway', 'main', 'auth_mode', 'none');
-			uci.set('agent_gateway', 'main', 'jwt_required', '0');
-			uci.set('agent_gateway', 'main', 'forwarding_assertion_enabled', '0');
-			return;
-		}
-
-		uci.set('agent_gateway', 'main', 'auth_mode', 'jwt');
-		uci.set('agent_gateway', 'main', 'jwt_required', '1');
-		setGatewayDefault('jwt_audience', 'nexus-agent-router');
-		setGatewayDefault('jwt_clock_skew_seconds', '30');
-		setGatewayDefault('jwt_max_lifetime_seconds', '300');
-		setGatewayDefault('transaction_replay_capacity', '512');
-		if (value === 'jwks') {
-			setGatewayDefault('jwt_jwks_file', '/etc/agent-gw/jwks.json');
-			setGatewayDefault('jwt_jwks_ca_file', '/etc/ssl/certs/ca-certificates.crt');
-			setGatewayDefault('jwt_jwks_timeout_seconds', '10');
-			setGatewayDefault('jwt_jwks_refresh_seconds', '300');
-			setGatewayDefault('jwt_jwks_url', conventionalJwksUrl(
-				uci.get('agent_gateway', 'main', 'jwt_issuer')));
-		}
-		else {
-			uci.unset('agent_gateway', 'main', 'jwt_jwks_file');
-			setGatewayDefault('jwt_public_key', '/etc/agent-gw/jwt-public.pem');
-			setGatewayDefault('jwt_kid', 'default');
-		}
-	};
-	option.remove = function() {
-		uci.set('agent_gateway', 'main', 'auth_mode', 'none');
-		uci.set('agent_gateway', 'main', 'jwt_required', '0');
-	};
-	return option;
-}
-
-function gatewayDefaultValue(option, name, fallback) {
-	option.cfgvalue = function() {
-		return uci.get('agent_gateway', 'main', name) || fallback;
-	};
-	option.write = function(sectionId, value) {
-		return uci.set('agent_gateway', 'main', name, value || fallback);
-	};
-	option.remove = function() {
-		return uci.set('agent_gateway', 'main', name, fallback);
-	};
-	return option;
+function authenticationSummary(data) {
+	const cloud = data[4] && data[4].cloud;
+	const managed = !!cloud && cloud.paired === true && cloudManagedAuthentication();
+	const lan = uci.get('agent_gateway', 'main', 'lan_sdk_enabled') === '1';
+	const gatewayUp = serviceRunning(data[2], 'agent-gw');
+	const jwksUp = serviceRunning(data[3], 'agent-jwks');
+	const cloudLabel = !cloud ? _('Status unavailable') : !cloud.paired ? _('Not paired') :
+		managed ? _('Managed by Nexus Cloud') : _('Cloud authentication needs synchronization');
+	return E('section', { 'class': 'ar-role-summary ar-role-surface' }, [
+		E('h2', {}, _('Authentication & trust')),
+		E('p', { 'class': 'ar-muted' }, _('Cloud pairing manages the caller identity issuer, audience, signing-key refresh and Cloud certificate trust. No token, key URL or certificate path needs to be entered here.')),
+		E('div', { 'class': 'ar-role-facts' }, [
+			E('div', { 'class': 'ar-role-fact' }, [E('span', {}, _('Cloud calls')), E('strong', {}, cloudLabel)]),
+			E('div', { 'class': 'ar-role-fact' }, [E('span', {}, _('LAN SDK')), E('strong', {}, lan ? _('Automatic LAN authentication') : _('Agent services not enabled'))]),
+			E('div', { 'class': 'ar-role-fact' }, [E('span', {}, _('Agent gateway')), E('strong', {}, data[2] == null ? _('Status unavailable') : gatewayUp ? _('Running') : _('Stopped'))]),
+			managed ? E('div', { 'class': 'ar-role-fact' }, [E('span', {}, _('Cloud signing-key refresh')), E('strong', {}, data[3] == null ? _('Status unavailable') : jwksUp ? _('Running') : _('Needs attention'))]) : E([], [])
+		]),
+		E('p', { 'class': 'ar-muted' }, _('LAN Agents obtain short-lived sessions automatically. Cloud pairing is not required for local registration. LAN bootstrap is separate from public and Relay caller authorization. Existing standalone policies are preserved.')),
+		E('a', { 'class': 'btn', 'href': L.url('admin/network/agent-router/developer/cloud') }, cloud && cloud.paired ? _('View Cloud connection') : _('Pair with Nexus Cloud')),
+		!lan ? E('a', { 'class': 'btn', 'href': L.url('admin/network/agent-router/home') }, _('Enable Agent services')) : E([], [])
+	]);
 }
 
 function gatewayDefaultFlag(option, name, fallback) {
@@ -98,26 +61,38 @@ function gatewayDefaultFlag(option, name, fallback) {
 }
 
 function pythonAgentRouterUrl() {
-	const listen = uci.get('agent_gateway', 'main', 'no_jwt_lan_listen') || '0.0.0.0:7445';
+	// Registration belongs on the trusted LAN bridge, never the LuCI web port.
+	const automatic = uci.get('agent_gateway', 'main', 'lan_sdk_enabled') === '1';
+	const legacy = uci.get('agent_gateway', 'main', 'no_jwt_lan_enabled') === '1' &&
+		uci.get('agent_gateway', 'main', 'auth_mode') === 'none';
+	if (!automatic && !legacy) return null;
+	const fallback = automatic ? '7446' : '7445';
+	const listen = uci.get('agent_gateway', 'main', automatic ? 'lan_sdk_listen' : 'no_jwt_lan_listen') || '0.0.0.0:' + fallback;
 	const match = String(listen).match(/:(\d{1,5})$/);
 	let host = window.location.hostname || 'ROUTER_LAN_IP';
 	if (host.includes(':') && host.charAt(0) !== '[')
 		host = '[' + host + ']';
-	return 'http://%s:%s'.format(host, match ? match[1] : '7445');
+	return 'http://%s:%s'.format(host, match ? match[1] : fallback);
+}
+
+function requireLanAccess() {
+	if (pythonAgentRouterUrl()) return true;
+	ui.showModal(_('Enable Agent services'), [
+		E('p', {}, _('Enable Agent services in User mode to make automatic LAN registration available.')),
+		E('a', { 'class': 'btn', 'href': L.url('admin/network/agent-router/home') }, _('Open User mode'))
+	]);
+	return false;
 }
 
 function showPythonAgentQuickStart() {
-	const noJwt = savedJwtMode() === 'none';
-	const router = noJwt ? pythonAgentRouterUrl() :
-		'%s//%s'.format(window.location.protocol, window.location.host);
+	if (!requireLanAccess()) return;
+	const router = pythonAgentRouterUrl();
 	const code = [
-		'# Install: python -m pip install nexus-agent-sdk',
+		'# Install: python -m pip install nexilume',
 		'from nexus_agent import NexusAgent',
-		noJwt ? null : '# Set NEXUS_AGENT_TOKEN to a short-lived Agent token.',
 		'',
 		'agent = NexusAgent(',
 		'    router=%s,'.format(JSON.stringify(router)),
-		noJwt ? '    auth="none",' : null,
 		'    tenant="local",',
 		')',
 		'',
@@ -149,9 +124,8 @@ function showPythonAgentQuickStart() {
 }
 
 function showPythonHttpsAgentQuickStart() {
-	const noJwt = savedJwtMode() === 'none';
-	const router = noJwt ? pythonAgentRouterUrl() :
-		'%s//%s'.format(window.location.protocol, window.location.host);
+	if (!requireLanAccess()) return;
+	const router = pythonAgentRouterUrl();
 	const caBundleId = uci.get('agent_gateway', 'main', 'remote_backend_ca_bundle_id') || 'system';
 	const code = [
 		'# The certificate must contain a lowercase dotted DNS SAN.',
@@ -159,7 +133,6 @@ function showPythonHttpsAgentQuickStart() {
 		'',
 		'agent = NexusAgent(',
 		'    router=%s,'.format(JSON.stringify(router)),
-		noJwt ? '    auth="none",' : null,
 		'    tenant="local",',
 		'    cert_file="agent-fullchain.pem",',
 		'    key_file="agent-key.pem",',
@@ -188,60 +161,6 @@ function showPythonHttpsAgentQuickStart() {
 	]);
 }
 
-function jwtIssuerOption(option) {
-	gatewayValue(option, 'jwt_issuer');
-	option.write = function(sectionId, value) {
-		uci.set('agent_gateway', 'main', 'jwt_issuer', value);
-		if (savedJwtMode() === 'jwks' && !uci.get('agent_gateway', 'main', 'jwt_jwks_url'))
-			uci.set('agent_gateway', 'main', 'jwt_jwks_url', conventionalJwksUrl(value));
-	};
-	return option;
-}
-
-function showJwtStatus(gatewayStatus, jwksStatus) {
-	const mode = savedJwtMode();
-	const labels = {
-		none: _('No JWT'),
-		jwks: _('Remote JWKS'),
-		local: _('Local public key')
-	};
-	const missing = [];
-	if (mode !== 'none') {
-		if (!uci.get('agent_gateway', 'main', 'jwt_issuer')) missing.push(_('Token issuer'));
-		if (!uci.get('agent_gateway', 'main', 'jwt_audience')) missing.push(_('Router audience'));
-	}
-	if (mode === 'jwks') {
-		if (!uci.get('agent_gateway', 'main', 'jwt_jwks_url')) missing.push(_('JWKS URL'));
-		if (!uci.get('agent_gateway', 'main', 'jwt_jwks_file')) missing.push(_('JWKS cache file'));
-	}
-	if (mode === 'local') {
-		if (!uci.get('agent_gateway', 'main', 'jwt_public_key')) missing.push(_('Public key file'));
-		if (!uci.get('agent_gateway', 'main', 'jwt_kid')) missing.push(_('Signing key ID'));
-	}
-
-	const gatewayUp = serviceRunning(gatewayStatus, 'agent-gw');
-	const updaterUp = serviceRunning(jwksStatus, 'agent-jwks');
-	const items = [
-		E('li', {}, '%s: %s'.format(_('Authentication mode'), labels[mode])),
-		E('li', {}, missing.length ?
-			_('Missing required values: %s').format(missing.join(', ')) :
-			_('All required saved values are present.')),
-		E('li', {}, '%s: %s'.format(_('Agent gateway'),
-			gatewayUp ? _('Running') : _('Stopped or waiting for Save & Apply')))
-	];
-	if (mode === 'jwks')
-		items.push(E('li', {}, '%s: %s'.format(_('JWKS updater'),
-			updaterUp ? _('Running') : _('Stopped or waiting for a valid HTTPS source'))));
-
-	ui.showModal(_('JWT configuration status'), [
-		E('p', {}, _('This check reads saved settings and service state. It never reads or displays an access token.')),
-		E('ul', {}, items),
-		E('div', { 'class': 'right' }, [
-			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close'))
-		])
-	]);
-}
-
 function a2aEdgeUrl(sectionId) {
 	const authority = uci.get('agent_adapter', sectionId, 'authority') || 'AGENT_CARD_ID';
 	const skill = uci.get('agent_adapter', sectionId, 'selector') || 'SKILL_ID';
@@ -262,9 +181,9 @@ function fastmcpPythonExample(sectionId) {
 	const tool = uci.get('agent_adapter', sectionId, 'selector') || 'lint_verilog';
 	const intent = uci.get('agent_adapter', sectionId, 'intent') || 'chip.verilog.verify.lint';
 	const tenant = uci.get('agent_adapter', 'main', 'default_tenant') || 'local';
-	const router = '%s//%s'.format(window.location.protocol, window.location.host);
+	const router = pythonAgentRouterUrl();
 	return [
-		'# Install: python -m pip install "nexus-agent-sdk[fastmcp]"',
+		'# Install: python -m pip install "nexilume[fastmcp]"',
 		'from fastmcp import Context, FastMCP',
 		'from nexus_agent import AutoTokenProvider, CapabilityRegistration, NexusAgentClient, NexusAgentServer',
 		'from nexus_agent.fastmcp import FastMCPBridge',
@@ -297,7 +216,9 @@ function fastmcpPythonExample(sectionId) {
 		'',
 		'# MCP client URL: %s'.format(mcpEdgeUrl(sectionId)),
 		'# Use Accept: application/json, text/event-stream for progress + result.',
-		'# On reconnect send Last-Event-ID; the Agent continues the original task.'
+		'# Standard MCP returns JSON-RPC events; GET resumption is not supported.',
+		'# Nexus cursor replay: set X-Nexus-Stream-Format: envelope on every POST.',
+		'# In that custom mode, keep a unique task ID and send Last-Event-ID on reconnect.'
 	].join('\n');
 }
 
@@ -308,7 +229,7 @@ function a2aPythonExample(sectionId) {
 	const tenant = uci.get('agent_adapter', 'main', 'default_tenant') || 'local';
 	const router = '%s//%s'.format(window.location.protocol, window.location.host);
 	return [
-		'# Install: python -m pip install "nexus-agent-sdk[a2a]"',
+		'# Install: python -m pip install "nexilume[a2a]"',
 		'',
 		'# Supply at most one short-lived credential outside source code.',
 		'import os',
@@ -340,8 +261,7 @@ function a2aPythonExample(sectionId) {
 		'',
 		'agent = NexusA2AAgent(',
 		'    MyExecutor(),',
-		'    router=%s,'.format(JSON.stringify(router)),
-		'    token=jwt,',
+		'    router=%s,'.format(JSON.stringify(pythonAgentRouterUrl())),
 		'    identity="agent://%s/MY_AGENT",'.format(tenant),
 		'    endpoint="https://AGENT_HOST:9443/invoke",',
 		'    tenant=%s,'.format(JSON.stringify(tenant)),
@@ -356,6 +276,7 @@ function a2aPythonExample(sectionId) {
 }
 
 function showA2AExample(sectionId) {
+	if (!requireLanAccess()) return;
 	const code = a2aPythonExample(sectionId);
 	const copy = E('button', {
 		'class': 'btn cbi-button cbi-button-positive',
@@ -371,13 +292,14 @@ function showA2AExample(sectionId) {
 		}
 	}, _('Copy code'));
 	ui.showModal(_('Python A2A caller and Agent'), [
-		E('p', {}, _('This code already contains the saved Card ID, Skill ID, intent and router URL. Put a short-lived JWT or Transaction Token in an environment variable; LuCI never stores or displays the token.')),
+		E('p', {}, _('Agent registration uses automatic LAN authentication. The standalone A2A API caller below is separate: it still needs an authorized caller JWT or Transaction Token. Cloud pairing is not caller authorization. LuCI never stores or displays the token.')),
 		E('pre', { 'class': 'ar-code-wrap' }, code),
 		E('div', { 'class': 'right' }, [ copy ])
 	]);
 }
 
 function showFastMCPExample(sectionId) {
+	if (!requireLanAccess()) return;
 	const code = fastmcpPythonExample(sectionId);
 	const copy = E('button', {
 		'class': 'btn cbi-button cbi-button-positive',
@@ -393,7 +315,7 @@ function showFastMCPExample(sectionId) {
 		}
 	}, _('Copy code'));
 	ui.showModal(_('Streaming FastMCP Agent'), [
-		E('p', {}, _('The generated Agent reports per-call progress and returns one final result. Its registration JWT comes from the Agent process environment and is never saved in LuCI.')),
+		E('p', {}, _('The SDK automatically acquires registration credentials on the trusted LAN listener. This HTTPS server example still requires its own server certificate; Cloud pairing does not replace that certificate.')),
 		E('pre', { 'class': 'ar-code-wrap' }, code),
 		E('div', { 'class': 'right' }, [ copy ])
 	]);
@@ -491,8 +413,9 @@ return view.extend({
 		return Promise.all([
 			uci.load('agent_adapter'),
 			uci.load('agent_gateway'),
-			callService('agent-gw').catch(() => ({})),
-			callService('agent-jwks').catch(() => ({}))
+			callService('agent-gw').catch(() => null),
+			callService('agent-jwks').catch(() => null),
+			callOverview().catch(() => null)
 		]);
 	},
 
@@ -504,7 +427,6 @@ return view.extend({
 		s = m.section(form.NamedSection, 'main', 'adapter', _('Agent access'));
 		s.addremove = false;
 		s.tab('common', _('Common setup'));
-		s.tab('auth', _('Authentication & task credentials'));
 		s.tab('backends', _('Python Agent Servers'));
 		s.tab('advanced', _('Advanced limits'));
 
@@ -514,7 +436,7 @@ return view.extend({
 
 		o = gatewayFlag(s.taboption('common', form.Flag, '_registration_enabled', _('Allow Python SDK registration')), 'registration_enabled');
 		o.rmempty = false;
-		o.description = _('Allows register, renew and unregister through the Agent Access Proxy. No JWT LAN mode exposes these methods on its dedicated listener.');
+		o.description = _('Allows registration, renewal and withdrawal. LAN SDK credentials are obtained automatically when Agent services is enabled.');
 
 		o = s.taboption('common', form.Flag, 'enabled', _('Enable MCP/A2A compatibility'));
 		o.rmempty = false;
@@ -533,91 +455,11 @@ return view.extend({
 		o = s.taboption('common', form.Value, 'default_tenant', _('Default tenant'));
 		o.rmempty = false;
 		o.placeholder = 'local';
-		o.description = _('Tenant assigned to protocol requests after they enter through the selected JWT or No JWT listener.');
+		o.description = _('Local routing namespace for protocol requests. Cloud ownership is assigned by the paired Cloud, not by this value.');
 
 		o = s.taboption('common', form.Value, 'source_agent', _('Protocol adapter identity'));
 		o.rmempty = false;
 		o.placeholder = 'agent://local/adapterd';
-
-		o = jwtModeOption(s.taboption('auth', form.ListValue, '_jwt_auth_mode', _('Agent call authentication')));
-		o.value('none', _('No JWT'));
-		o.value('jwks', _('Remote JWKS - recommended'));
-		o.value('local', _('Local public key - advanced'));
-		o.rmempty = false;
-		o.description = _('No JWT accepts calls without a token on every enabled entry point. Remote JWKS remains the recommended Internet-facing mode.');
-
-		o = gatewayFlag(s.taboption('auth', form.Flag, '_no_jwt_lan_enabled', _('Enable No JWT LAN access')), 'no_jwt_lan_enabled');
-		o.rmempty = false;
-		o.depends('_jwt_auth_mode', 'none');
-		o.description = _('Starts a dedicated LAN Agent API listener. Calls can use local routes or continue through Peer, Relay and cross-NAT routes without adding a JWT.');
-		o = gatewayValue(s.taboption('auth', form.Value, '_no_jwt_lan_listen', _('No JWT LAN listener')), 'no_jwt_lan_listen');
-		o.rmempty = false;
-		o.placeholder = '0.0.0.0:7445';
-		o.depends({ '_jwt_auth_mode': 'none', '_no_jwt_lan_enabled': '1' });
-		o.description = _('Use the router LAN address with this port in NEXUS_ROUTER_URL. The default is TCP 7445.');
-		o.validate = function(sectionId, value) {
-			const match = String(value || '').trim().match(/^(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:]+\]):(\d{1,5})$/);
-			if (!match || Number(match[1]) < 1 || Number(match[1]) > 65535)
-				return _('Use IPv4:port or [IPv6]:port, for example 0.0.0.0:7445.');
-			return true;
-		};
-
-		o = gatewayFlag(s.taboption('auth', form.Flag, '_lan_sdk_enabled', _('Enable JWT-protected LAN SDK access')), 'lan_sdk_enabled');
-		o.rmempty = false;
-		o.depends('_jwt_auth_mode', 'jwks'); o.depends('_jwt_auth_mode', 'local');
-		o.description = _('Starts a dedicated LAN listener that preserves Authorization. The gateway verifies the JWT for SDK registration, renewal and invocation.');
-		o = gatewayValue(s.taboption('auth', form.Value, '_lan_sdk_listen', _('JWT LAN SDK listener')), 'lan_sdk_listen');
-		o.rmempty = false;
-		o.placeholder = '0.0.0.0:7446';
-		o.depends({ '_jwt_auth_mode': 'jwks', '_lan_sdk_enabled': '1' });
-		o.depends({ '_jwt_auth_mode': 'local', '_lan_sdk_enabled': '1' });
-		o.description = _('Use this LAN address in NEXUS_ROUTER_URL and provide the short-lived SDK Agent JWT. Firewall exposure remains administrator-controlled.');
-		o.validate = function(sectionId, value) {
-			const match = String(value || '').trim().match(/^(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:]+\]):(\d{1,5})$/);
-			if (!match || Number(match[1]) < 1 || Number(match[1]) > 65535)
-				return _('Use IPv4:port or [IPv6]:port, for example 0.0.0.0:7446.');
-			return true;
-		};
-
-		o = jwtIssuerOption(s.taboption('auth', form.Value, '_jwt_issuer', _('Token issuer URL')));
-		o.rmempty = false; o.placeholder = 'https://id.example.com';
-		o.depends('_jwt_auth_mode', 'jwks'); o.depends('_jwt_auth_mode', 'local');
-		o.description = _('Must exactly match the issuer claim in Agent tokens.');
-		o = gatewayDefaultValue(s.taboption('auth', form.Value, '_jwt_audience', _('Router audience')), 'jwt_audience', 'nexus-agent-router');
-		o.rmempty = false; o.placeholder = 'nexus-agent-router';
-		o.depends('_jwt_auth_mode', 'jwks'); o.depends('_jwt_auth_mode', 'local');
-		o.description = _('The default works for Nexus SDK deployments. Change it only when your identity provider uses a different audience.');
-		o = gatewayValue(s.taboption('auth', form.Value, '_jwt_jwks_url', _('JWKS URL')), 'jwt_jwks_url');
-		o.rmempty = false; o.placeholder = 'https://id.example.com/.well-known/jwks.json';
-		o.depends('_jwt_auth_mode', 'jwks');
-		o.description = _('Generated from the issuer when empty. Override it if your provider publishes keys at another HTTPS address.');
-
-		o = s.taboption('auth', form.Button, '_jwt_status', _('Configuration status'));
-		o.inputtitle = _('Check saved configuration');
-		o.inputstyle = 'apply';
-		o.onclick = function() { showJwtStatus(data[2], data[3]); };
-		o.description = _('Checks required saved values plus the gateway and JWKS refresher service state. Save & Apply before checking recent edits.');
-
-		o = gatewayDefaultValue(s.taboption('advanced', form.Value, '_jwt_kid', _('Local signing key ID')), 'jwt_kid', 'default');
-		o.rmempty = false; o.placeholder = 'default'; o.depends('_jwt_auth_mode', 'local');
-		o.description = _('Advanced local-key mode only. It must match the key ID carried by the Agent token.');
-		o = gatewayDefaultValue(s.taboption('advanced', form.Value, '_jwt_public_key', _('Local public key file')), 'jwt_public_key', '/etc/agent-gw/jwt-public.pem');
-		o.rmempty = false; o.placeholder = '/etc/agent-gw/jwt-public.pem'; o.depends('_jwt_auth_mode', 'local');
-		o = gatewayDefaultValue(s.taboption('advanced', form.Value, '_jwt_jwks_file', _('JWKS cache file')), 'jwt_jwks_file', '/etc/agent-gw/jwks.json');
-		o.rmempty = false; o.placeholder = '/etc/agent-gw/jwks.json'; o.depends('_jwt_auth_mode', 'jwks');
-		o.description = _('Managed automatically by the JWKS refresher. The default is recommended.');
-		o = gatewayDefaultValue(s.taboption('advanced', form.Value, '_jwt_jwks_ca_file', _('JWKS HTTPS CA file')), 'jwt_jwks_ca_file', '/etc/ssl/certs/ca-certificates.crt');
-		o.rmempty = false; o.placeholder = '/etc/ssl/certs/ca-certificates.crt'; o.depends('_jwt_auth_mode', 'jwks');
-		o = gatewayDefaultValue(s.taboption('advanced', form.Value, '_jwt_clock_skew_seconds', _('Allowed clock skew (seconds)')), 'jwt_clock_skew_seconds', '30');
-		o.datatype = 'range(0,300)'; o.rmempty = false;
-		o.depends('_jwt_auth_mode', 'jwks'); o.depends('_jwt_auth_mode', 'local');
-		o = gatewayDefaultValue(s.taboption('advanced', form.Value, '_jwt_max_lifetime_seconds', _('Maximum token lifetime (seconds)')), 'jwt_max_lifetime_seconds', '300');
-		o.datatype = 'range(1,3600)'; o.rmempty = false;
-		o.depends('_jwt_auth_mode', 'jwks'); o.depends('_jwt_auth_mode', 'local');
-		o = gatewayDefaultValue(s.taboption('advanced', form.Value, '_transaction_replay_capacity', _('Transaction-token replay cache')), 'transaction_replay_capacity', '512');
-		o.datatype = 'range(1,65536)'; o.rmempty = false;
-		o.depends('_jwt_auth_mode', 'jwks'); o.depends('_jwt_auth_mode', 'local');
-		o.description = _('One-time Transaction Tokens are rejected if the same issuer/transaction ID is seen again before expiry.');
 
 		o = s.taboption('backends', form.DummyValue, '_python_agent_help', _('What the router calls'));
 		o.cfgvalue = function() { return _('Automatic for SDK-managed Agents'); };
@@ -639,42 +481,22 @@ return view.extend({
 		o.default = o.enabled;
 		o.description = _('Recommended. The Python SDK submits the Agent address, certificate DNS name, trusted CA label and certificate fingerprint. The router creates a route-bound mapping and removes it when the Agent lease ends.');
 
-		o = s.taboption('backends', form.ListValue, '_python_agent_ca_mode', _('HTTPS Agent certificate trust'));
-		o.value('system', _('System public certificate authorities'));
-		o.value('private', _('Private or enterprise CA'));
+		o = s.taboption('backends', form.DummyValue, '_python_agent_ca_policy', _('HTTPS Agent certificate trust'));
 		o.cfgvalue = function() {
-			return (uci.get('agent_gateway', 'main', 'remote_backend_ca_bundle_id') || 'system') === 'system' &&
-				(uci.get('agent_gateway', 'main', 'remote_backend_ca_file') || '/etc/ssl/certs/ca-certificates.crt') === '/etc/ssl/certs/ca-certificates.crt' ? 'system' : 'private';
+			const label = uci.get('agent_gateway', 'main', 'remote_backend_ca_bundle_id') || 'system';
+			const file = uci.get('agent_gateway', 'main', 'remote_backend_ca_file') || '/etc/ssl/certs/ca-certificates.crt';
+			return label === 'system' && file === '/etc/ssl/certs/ca-certificates.crt' ?
+				_('System certificate authorities') : _('Existing administrator-approved trust');
 		};
-		o.write = function(sectionId, value) {
-			if (value === 'system') {
-				uci.set('agent_gateway', 'main', 'remote_backend_ca_bundle_id', 'system');
-				uci.set('agent_gateway', 'main', 'remote_backend_ca_file', '/etc/ssl/certs/ca-certificates.crt');
-			}
-			else {
-				setGatewayDefault('remote_backend_ca_bundle_id', 'enterprise-agent-ca');
-				setGatewayDefault('remote_backend_ca_file', '/etc/agent-gw/backend-ca.pem');
-			}
-		};
-		o.depends('_remote_backend_enabled', '1');
-		o.description = _('The SDK may report a CA label, but it cannot authorize its own CA. Select a router-trusted bundle here once; individual endpoint mappings remain automatic.');
+		o.write = function() {};
+		o.remove = function() {};
+		o.description = _('Read only. HTTPS Agent server certificates are separate from Cloud identity. Existing administrator-approved CA configuration is preserved; Cloud pairing does not authorize arbitrary Agent certificates. Ordinary LAN Agents need no certificate setup.');
 
 		o = s.taboption('backends', form.Button, '_python_https_agent_example', _('HTTPS Python quick start'));
 		o.inputtitle = _('Show automatic HTTPS example');
 		o.inputstyle = 'apply';
 		o.onclick = showPythonHttpsAgentQuickStart;
 		o.depends('_remote_backend_enabled', '1');
-
-		o = gatewayValue(s.taboption('backends', form.Value, '_remote_backend_ca_bundle_id', _('Trusted CA label')), 'remote_backend_ca_bundle_id');
-		o.rmempty = false;
-		o.placeholder = 'enterprise-agent-ca';
-		o.depends('_python_agent_ca_mode', 'private');
-		o.description = _('Must match server_ca_bundle_id used by trusted Python Agents. This is a label, not a certificate or secret.');
-		o = gatewayValue(s.taboption('backends', form.Value, '_remote_backend_ca_file', _('Trusted CA bundle file')), 'remote_backend_ca_file');
-		o.rmempty = false;
-		o.placeholder = '/etc/agent-gw/backend-ca.pem';
-		o.depends('_python_agent_ca_mode', 'private');
-		o.description = _('Router-local PEM bundle containing the CA certificates an administrator has approved. Agents cannot overwrite this file.');
 
 		o = s.taboption('backends', form.Flag, '_show_fixed_https_mappings', _('Show legacy fixed mappings'));
 		o.rmempty = true;
@@ -800,7 +622,7 @@ return view.extend({
 		return m.render().then(function(node) {
 			return E([], [
 				E('link', { 'rel': 'stylesheet', 'href': L.resource('agent-router/agent-router.css') + '?v=#PKG_VERSION' }),
-				mode.render('developer'), node
+				mode.render('developer'), authenticationSummary(data), node
 			]);
 		});
 	}

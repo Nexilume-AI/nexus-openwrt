@@ -47,6 +47,21 @@ struct adapter_normalized_request {
     struct json_object *envelope;
 };
 
+struct adapter_mcp_stream_state {
+    bool finished;
+    bool has_progress;
+    double progress;
+};
+
+/* Decode a complete Nexus SSE event into an MCP JSON-RPC message. A NULL
+ * message means a comment or an unrequested progress update was consumed. */
+bool adapter_codec_mcp_event(
+    const struct adapter_normalized_request *normalized,
+    struct adapter_mcp_stream_state *state,
+    const char *event, size_t event_length,
+    struct json_object **message
+);
+
 enum adapter_codec_result adapter_codec_normalize(
     const struct adapter_registry *registry,
     const struct adapter_codec_options *options,

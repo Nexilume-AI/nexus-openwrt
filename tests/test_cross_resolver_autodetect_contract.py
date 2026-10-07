@@ -34,15 +34,13 @@ def main() -> int:
             '"cross_discovery_resolver_port"' in agentd and
             '"cross_discovery_resolver_detected"' in agentd,
             "agent.stats must expose the effective resolver endpoint")
-    require("method: 'stats'" in settings and "Local DNSSEC resolver" in settings and
-            "resolverAutomatic" in settings and "resolverReady" in settings,
-            "LuCI must report native resolver selection")
-    require("Automatic (recommended)" in settings and "Manual override" in settings,
-            "LuCI must prefer automatic selection and retain an explicit override")
-    require(settings.count("depends('cross_discovery_resolver_mode', 'manual')") == 2,
-            "manual IPv4 and port fields must stay hidden in automatic mode")
-    require("This is not the remote router address" in settings,
-            "manual override copy must distinguish the local resolver from the peer")
+    # DNS federation remains native backwards compatibility, not a new-user
+    # configuration surface. Open Mesh seed joining is the supported UI path.
+    require("Local DNSSEC resolver" not in settings and
+            "depends('cross_discovery_resolver_mode', 'manual')" not in settings,
+            "LuCI must not reintroduce removed DNS federation editors")
+    require("Open Mesh" in settings and "meshSetup.render({ clientOnly: true })" in settings,
+            "LuCI must retain the separate link-based Open Mesh client controls")
     return 0
 
 

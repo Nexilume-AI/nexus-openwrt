@@ -293,6 +293,8 @@ static void relay_peer_from_assignment(
                     assignment->session_ticket);
     peer->role = AGENT_PEER_ROLE_RELAY;
     peer->open_mesh = assignment->open_mesh;
+    (void)copy_text(peer->mesh_connect_host, sizeof(peer->mesh_connect_host), assignment->mesh_connect_host);
+    (void)copy_text(peer->mesh_tls_sha256, sizeof(peer->mesh_tls_sha256), assignment->mesh_tls_sha256);
     peer->state = AGENT_PEER_STATE_CONFIGURED;
     peer->graceful_restart_seconds = 30U;
 }
@@ -4017,6 +4019,11 @@ static void add_relay_status(
     blobmsg_add_u8(buffer, "enabled", status.enabled);
     blobmsg_add_u8(buffer, "query_active", status.query_active);
     blobmsg_add_u8(buffer, "assignment_active", status.assignment_active);
+    struct agent_peer_transport_status mesh_transport_status;
+    bool tunnel_connected = status.assignment_active &&
+        agent_peer_transport_get_status(peer_transport, status.assignment.relay_id, &mesh_transport_status) &&
+        mesh_transport_status.relay_tunnel_up;
+    blobmsg_add_u8(buffer, "tunnel_connected", tunnel_connected);
     blobmsg_add_string(buffer, "phase",
                        status.phase == NULL ? "unavailable" : status.phase);
     blobmsg_add_u64(buffer, "assignment_remaining_ms",
@@ -5780,6 +5787,9 @@ static bool read_options(int argc, char **argv)
     }
     open_mesh_directory_endpoints =
         getenv("NEXUS_OPEN_MESH_DIRECTORY_ENDPOINTS");
+    const char *mesh_profile_json = getenv("NEXUS_OPEN_MESH_JOIN_PROFILE");
+    if (mesh_profile_json && mesh_profile_json[0] && !copy_text(config.open_mesh_relay.mesh_profile_json,
+            sizeof(config.open_mesh_relay.mesh_profile_json), mesh_profile_json)) return false;
     if (open_mesh_directory_endpoints != NULL &&
         open_mesh_directory_endpoints[0] != '\0' &&
         !copy_text(config.open_mesh_relay.directory_endpoint,

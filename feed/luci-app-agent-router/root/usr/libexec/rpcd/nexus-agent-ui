@@ -25,6 +25,10 @@ config_generation() {
 		uci -q export agent 2>/dev/null
 		uci -q export agent_gateway 2>/dev/null
 		uci -q export agent_adapter 2>/dev/null
+		uci -q export nexus_roles 2>/dev/null
+		uci -q export network 2>/dev/null
+		uci -q export firewall 2>/dev/null
+		sha256sum /etc/nexus-relayd/relay.json /etc/nexus-directoryd/directory.json 2>/dev/null
 		uci -q export nexus_cloud 2>/dev/null | sed '/pairing_code/d'
 	} | sha256sum | cut -c1-8
 	)"
@@ -77,6 +81,49 @@ service_running() {
 	local service="$1"
 	ubus -S call service list "{\"name\":\"$service\"}" 2>/dev/null |
 		grep -q '"running"[[:space:]]*:[[:space:]]*true'
+}
+
+# Read-only, bounded probes. Never issue a synthetic registration or invoke
+# from a status poll and never publish credentials or raw HTTP responses.
+local_health() {
+	local address="$1"
+	case "$address" in 127.0.0.1:[0-9]*|\[::1\]:[0-9]*) ;; *) return 1 ;; esac
+	case "$address" in *[!0-9a-fA-F.:\[\]]*) return 1 ;; esac
+	curl --noproxy '*' -fsS --connect-timeout 1 --max-time 2 --max-filesize 65536 \
+		"http://$address/healthz" 2>/dev/null
+}
+
+agent_services_healthy() {
+	local health adapter lan_address lan_port metadata
+	service_running agent-gw && service_running agent-adapter && service_running agent-edge || return 1
+	ubus -S call agent stats >/dev/null 2>&1 || return 1
+	health="$(local_health "$(uci_value agent_gateway main listen 127.0.0.1:7788)")" || return 1
+	for key in invoke_enabled registration_enabled lan_bootstrap_enabled stream_enabled; do
+		[ "$(jsonfilter_value "$health" "@.$key")" = true ] || return 1
+	done
+	adapter="$(local_health "$(uci_value agent_adapter main listen 127.0.0.1:7790)")" || return 1
+	[ "$(jsonfilter_value "$adapter" '@.status')" = ok ] || return 1
+	lan_address="$(uci_value network lan ipaddr '')"; lan_address="${lan_address%/*}"
+	lan_port="$(uci_value agent_gateway main lan_sdk_listen 0.0.0.0:7446)"; lan_port="${lan_port##*:}"
+	case "$lan_address" in ''|*[!0-9.]*) return 1 ;; esac
+	case "$lan_port" in ''|*[!0-9]*) return 1 ;; esac
+	metadata="$(curl --noproxy '*' -fsS --connect-timeout 1 --max-time 2 --max-filesize 65536 \
+		"http://$lan_address:$lan_port/agent/v1/authentication" 2>/dev/null)" || return 1
+	[ "$(jsonfilter_value "$metadata" '@.bootstrap.type')" = trusted-lan ]
+}
+
+network_healthy() {
+	local enabled="$1" stats discovery
+	stats="$(ubus -S call agent stats 2>/dev/null)" || return 1
+	discovery="$(ubus -S call agent discoveries 2>/dev/null)" || return 1
+	if [ "$enabled" = 1 ]; then
+		[ "$(jsonfilter_value "$stats" '@.peer_listener_listening')" = true ] &&
+			[ "$(jsonfilter_value "$discovery" '@.enabled')" = true ]
+	else
+		[ "$(jsonfilter_value "$stats" '@.peer_listener_enabled')" = false ] &&
+			[ "$(jsonfilter_value "$discovery" '@.enabled')" = false ] &&
+			[ "$(jsonfilter_value "$stats" '@.open_mesh_relay_bootstrap_enabled')" = false ]
+	fi
 }
 
 cloud_profile_value() {
@@ -205,7 +252,7 @@ add_routes() {
 overview() {
 	local stats neighbors agents routes cloud_state cloud_friendly cloud_enabled
 	local router_enabled agent_enabled paired transport registered updated overall action
-	local route_count neighbor_count agent_count generation
+	local route_count neighbor_count agent_count generation router_state agent_state
 	stats="$(ubus -S call agent stats 2>/dev/null || true)"
 	neighbors="$(ubus -S call agent neighbors "{\"limit\":$LIST_LIMIT}" 2>/dev/null || printf '{\"neighbors\":[]}')"
 	agents="$(ubus -S call agent agents "{\"limit\":$LIST_LIMIT}" 2>/dev/null || printf '{\"agents\":[]}')"
@@ -214,15 +261,19 @@ overview() {
 	cloud_enabled="$(uci_bool nexus_cloud main enabled 0)"
 	router_enabled=0
 	[ "$(uci_bool agent main enabled 1)" = 1 ] &&
+		[ "$(uci_bool agent main router_network_enabled 1)" = 1 ] &&
 		[ "$(uci_bool agent main peer_transport_enabled 0)" = 1 ] &&
 		[ "$(uci_bool agent main peer_listener_enabled 0)" = 1 ] &&
 		[ "$(uci_bool agent main discovery_enabled 0)" = 1 ] &&
 		[ "$(uci_bool agent main discovery_publish_enabled 0)" = 1 ] && router_enabled=1
 	agent_enabled=0
 	[ "$(uci_bool agent_gateway main registration_enabled 0)" = 1 ] &&
+		[ "$(uci_bool agent_gateway main services_enabled 1)" = 1 ] &&
 		[ "$(uci_bool agent_gateway main invoke_enabled 0)" = 1 ] &&
 		[ "$(uci_bool agent_gateway main lan_sdk_enabled 0)" = 1 ] &&
 		[ "$(uci_bool agent_gateway main lan_backend_enabled 1)" = 1 ] &&
+		[ "$(uci_bool agent_gateway main stream_enabled 0)" = 1 ] &&
+		[ "$(uci_bool agent_adapter main stream_enabled 0)" = 1 ] &&
 		[ "$(uci_bool agent_adapter main enabled 0)" = 1 ] && agent_enabled=1
 
 	cloud_state="$(cloud_status_value state)"
@@ -236,6 +287,15 @@ overview() {
 	agent_count="$(jsonfilter -q -s "$agents" -e '@.agents[*].agent_id' 2>/dev/null | wc -l | tr -d ' ')"
 	generation="$(config_generation)"
 	[ "$cloud_enabled" = 1 ] || cloud_friendly=disabled
+	router_state=disabled; agent_state=disabled
+	if [ "$router_enabled" = 1 ]; then
+		router_state=degraded
+		network_healthy 1 && router_state=ready
+	fi
+	if [ "$agent_enabled" = 1 ]; then
+		agent_state=degraded
+		agent_services_healthy && agent_state=ready
+	fi
 
 	overall=ready
 	action=none
@@ -254,6 +314,9 @@ overview() {
 	elif [ "$agent_enabled" = 0 ]; then
 		overall=needs_attention
 		action=enable_agent_services
+	elif [ "$router_state" != ready ] || [ "$agent_state" != ready ]; then
+		overall=needs_attention
+		action=open_developer
 	fi
 
 	json_init
@@ -273,14 +336,17 @@ overview() {
 
 	json_add_object router_network
 	json_add_boolean enabled "$router_enabled"
-	json_add_string state "$([ "$router_enabled" = 1 ] && printf ready || printf disabled)"
+	json_add_string state "$router_state"
+	json_add_string verification local_services
 	json_add_int neighbors "${neighbor_count:-0}"
 	json_add_int routes "${route_count:-0}"
 	json_close_object
 
 	json_add_object agent_services
 	json_add_boolean enabled "$agent_enabled"
-	json_add_string state "$([ "$agent_enabled" = 1 ] && printf ready || printf disabled)"
+	json_add_string state "$agent_state"
+	json_add_string verification lan_metadata
+	json_add_string external_reachability not_verified
 	json_add_int agents "${agent_count:-0}"
 	json_close_object
 
@@ -326,18 +392,24 @@ reload_feature() {
 
 verify_feature() {
 	local feature="$1" enabled="$2"
-	[ "$enabled" = 1 ] || return 0
 	case "$feature" in
-		cloud) service_running nexus-cloud ;;
-		router_network) service_running agentd ;;
-		agent_services) service_running agent-gw && service_running agent-adapter && service_running agent-edge ;;
+		cloud) if [ "$enabled" = 1 ]; then service_running nexus-cloud; else ! service_running nexus-cloud; fi ;;
+		router_network) network_healthy "$enabled" ;;
+		agent_services)
+			if [ "$enabled" = 1 ]; then agent_services_healthy
+			else
+				local health
+				health="$(local_health "$(uci_value agent_gateway main listen 127.0.0.1:7788)")" || return 1
+				[ "$(jsonfilter_value "$health" '@.invoke_enabled')" = false ] &&
+					[ "$(jsonfilter_value "$health" '@.registration_enabled')" = false ] &&
+					[ "$(jsonfilter_value "$health" '@.lan_bootstrap_enabled')" = false ]
+			fi ;;
 		*) return 1 ;;
 	esac
 }
 
 wait_for_feature() {
 	local feature="$1" enabled="$2" attempt=0
-	[ "$enabled" = 1 ] || return 0
 	while [ "$attempt" -lt 5 ]; do
 		verify_feature "$feature" "$enabled" && return 0
 		attempt=$((attempt + 1))
@@ -347,7 +419,13 @@ wait_for_feature() {
 }
 
 set_feature_locked() {
-	local feature="$1" enabled="$2"
+	local feature="$1" enabled="$2" change_failed=0
+	# UCI commit is package-wide: do not commit another session's staged edits.
+	case "$feature" in
+		cloud) [ -z "$(uci changes nexus_cloud)" ] || return 3 ;;
+		router_network) [ -z "$(uci changes agent)" ] || return 3 ;;
+		agent_services) [ -z "$(uci changes agent_gateway)$(uci changes agent_adapter)" ] || return 3 ;;
+	esac
 	case "$feature" in
 		cloud)
 			remember_option nexus_cloud main enabled old_cloud
@@ -366,17 +444,20 @@ set_feature_locked() {
 			;;
 		router_network)
 			remember_option agent main enabled old_router_core
+			remember_option agent main router_network_enabled old_network_gate
 			remember_option agent main peer_transport_enabled old_peer_transport
 			remember_option agent main peer_listener_enabled old_peer_listener
 			remember_option agent main discovery_enabled old_discovery
 			remember_option agent main discovery_publish_enabled old_publish
-			[ "$enabled" = 1 ] && uci set agent.main.enabled=1
-			uci set "agent.main.peer_transport_enabled=$enabled"
-			uci set "agent.main.peer_listener_enabled=$enabled"
-			uci set "agent.main.discovery_enabled=$enabled"
-			uci set "agent.main.discovery_publish_enabled=$enabled"
-			if ! uci commit agent; then
+			if [ "$enabled" = 1 ]; then uci set agent.main.enabled=1 || change_failed=1; fi
+			uci set "agent.main.router_network_enabled=$enabled" || change_failed=1
+			uci set "agent.main.peer_transport_enabled=$enabled" || change_failed=1
+			uci set "agent.main.peer_listener_enabled=$enabled" || change_failed=1
+			uci set "agent.main.discovery_enabled=$enabled" || change_failed=1
+			uci set "agent.main.discovery_publish_enabled=$enabled" || change_failed=1
+			if [ "$change_failed" != 0 ] || ! uci commit agent; then
 				restore_option agent main enabled old_router_core
+				restore_option agent main router_network_enabled old_network_gate
 				restore_option agent main peer_transport_enabled old_peer_transport
 				restore_option agent main peer_listener_enabled old_peer_listener
 				restore_option agent main discovery_enabled old_discovery
@@ -386,6 +467,7 @@ set_feature_locked() {
 			fi
 			if ! reload_feature router_network || ! wait_for_feature router_network "$enabled"; then
 				restore_option agent main enabled old_router_core
+				restore_option agent main router_network_enabled old_network_gate
 				restore_option agent main peer_transport_enabled old_peer_transport
 				restore_option agent main peer_listener_enabled old_peer_listener
 				restore_option agent main discovery_enabled old_discovery
@@ -396,32 +478,44 @@ set_feature_locked() {
 			fi
 			;;
 		agent_services)
+			remember_option agent_gateway main services_enabled old_services_gate
 			remember_option agent_gateway main registration_enabled old_registration
 			remember_option agent_gateway main invoke_enabled old_invoke
 			remember_option agent_gateway main lan_sdk_enabled old_lan_sdk
 			remember_option agent_gateway main lan_backend_enabled old_lan_backend
 			remember_option agent_adapter main enabled old_adapter
-			uci set "agent_gateway.main.registration_enabled=$enabled"
-			uci set "agent_gateway.main.invoke_enabled=$enabled"
-			uci set "agent_gateway.main.lan_sdk_enabled=$enabled"
-			uci set "agent_gateway.main.lan_backend_enabled=$enabled"
-			uci set "agent_adapter.main.enabled=$enabled"
-			if ! uci commit agent_gateway || ! uci commit agent_adapter; then
+			remember_option agent_gateway main stream_enabled old_gateway_stream
+			remember_option agent_adapter main stream_enabled old_adapter_stream
+			uci set "agent_gateway.main.registration_enabled=$enabled" || change_failed=1
+			uci set "agent_gateway.main.services_enabled=$enabled" || change_failed=1
+			uci set "agent_gateway.main.invoke_enabled=$enabled" || change_failed=1
+			uci set "agent_gateway.main.lan_sdk_enabled=$enabled" || change_failed=1
+			uci set "agent_gateway.main.lan_backend_enabled=$enabled" || change_failed=1
+			uci set "agent_adapter.main.enabled=$enabled" || change_failed=1
+			uci set "agent_gateway.main.stream_enabled=$enabled" || change_failed=1
+			uci set "agent_adapter.main.stream_enabled=$enabled" || change_failed=1
+			if [ "$change_failed" != 0 ] || ! uci commit agent_gateway || ! uci commit agent_adapter; then
+				restore_option agent_gateway main services_enabled old_services_gate
 				restore_option agent_gateway main registration_enabled old_registration
 				restore_option agent_gateway main invoke_enabled old_invoke
 				restore_option agent_gateway main lan_sdk_enabled old_lan_sdk
 				restore_option agent_gateway main lan_backend_enabled old_lan_backend
 				restore_option agent_adapter main enabled old_adapter
+				restore_option agent_gateway main stream_enabled old_gateway_stream
+				restore_option agent_adapter main stream_enabled old_adapter_stream
 				uci commit agent_gateway
 				uci commit agent_adapter
 				return 1
 			fi
 			if ! reload_feature agent_services || ! wait_for_feature agent_services "$enabled"; then
+				restore_option agent_gateway main services_enabled old_services_gate
 				restore_option agent_gateway main registration_enabled old_registration
 				restore_option agent_gateway main invoke_enabled old_invoke
 				restore_option agent_gateway main lan_sdk_enabled old_lan_sdk
 				restore_option agent_gateway main lan_backend_enabled old_lan_backend
 				restore_option agent_adapter main enabled old_adapter
+				restore_option agent_gateway main stream_enabled old_gateway_stream
+				restore_option agent_adapter main stream_enabled old_adapter_stream
 				uci commit agent_gateway
 				uci commit agent_adapter
 				reload_feature agent_services || true
@@ -453,22 +547,42 @@ set_feature() {
 	result=$?
 	release_ui_lock
 	case "$result" in
-		0) json_reply_ok "$([ "$enabled" = 1 ] && printf ready || printf disabled)" ;;
+		0)
+			if [ "$enabled" != 1 ]; then json_reply_ok disabled
+			elif [ "$feature" = cloud ]; then json_reply_ok connecting
+			else json_reply_ok ready; fi ;;
 		2) json_reply_error INVALID_FEATURE 'Unknown Nexus feature.' ;;
+		3) json_reply_error CONFIGURATION_CHANGED 'There are pending configuration edits. Apply or discard them before using this switch.' ;;
 		*) json_reply_error APPLY_FAILED 'The Router could not apply and verify this feature. The previous settings were restored.' ;;
 	esac
 }
 
 pair_cloud() {
-	local input code expected current base enrollment
+	local input code expected current base enrollment pair_stage='' is_link=0 token_path old_origin result=0 option
 	input="$(cat)"
 	json_load "$input" 2>/dev/null || { json_reply_error INVALID_REQUEST 'The request is not valid JSON.'; return; }
 	json_get_var code pairing_code
 	json_get_var expected expected_generation
 	case "$code" in
-		''|*[!A-Za-z0-9._~-]*) json_reply_error INVALID_PAIRING_CODE 'Enter the one-time pairing code from Nexus Cloud.'; return ;;
+		nexus-router://*)
+			[ -r /usr/share/nexus-cloud/pairing-link.sh ] || { json_reply_error FIRMWARE_UPGRADE_REQUIRED 'Update the Cloud connector to use pairing links.'; return; }
+			. /usr/share/nexus-cloud/pairing-link.sh
+			pair_stage="$(mktemp -d /tmp/nexus-pairing.XXXXXX)" || return 1
+			chmod 0700 "$pair_stage"
+			if ! parse_pairing_link "$code" "$pair_stage"; then
+				rm -rf "$pair_stage"
+				json_reply_error "$PAIRING_ERROR" 'The pairing link is invalid or expired. Copy a new link from your trusted Nexus Cloud console.'
+				return
+			fi
+			code="$PAIRING_CODE"
+			is_link=1
+			;;
+		''|*[!A-Za-z0-9._~-]*) json_reply_error INVALID_PAIRING_CODE 'Paste the pairing link or one-time code from Nexus Cloud.'; return ;;
+		*) [ "${#code}" -le 256 ] || { json_reply_error INVALID_PAIRING_CODE 'The pairing code is too long.'; return; } ;;
 	esac
-	[ "${#code}" -le 256 ] || { json_reply_error INVALID_PAIRING_CODE 'The pairing code is too long.'; return; }
+	# Staged files contain public certificates only, never the pairing code.
+	PAIR_STAGE_CLEANUP="$pair_stage"
+	trap '[ -z "$PAIR_STAGE_CLEANUP" ] || rm -rf "$PAIR_STAGE_CLEANUP"' EXIT
 	acquire_ui_lock || { json_reply_error BUSY 'Another Nexus configuration change is in progress.'; return; }
 	current="$(config_generation)"
 	if [ -n "$expected" ] && [ "$expected" != "$current" ]; then
@@ -480,6 +594,22 @@ pair_cloud() {
 	enrollment="$(uci_value nexus_cloud main enrollment_url '')"
 	[ -n "$base" ] || base="$(cloud_profile_value base_url)"
 	[ -n "$enrollment" ] || enrollment="$(cloud_profile_value enrollment_url)"
+	if [ "$is_link" = 1 ]; then
+		token_path="$(uci_value nexus_cloud main token_file /etc/nexus-cloud/device.token)"
+		old_origin="${enrollment:-$base}"
+		if [ -s "$token_path" ] && [ "${old_origin%/}" != "$PAIRING_ORIGIN" ]; then
+			release_ui_lock
+			json_reply_error CLOUD_IDENTITY_CONFLICT 'This Router belongs to another Cloud. Remove its existing enrollment in Developer mode before pairing with a different Cloud.'
+			return
+		fi
+		enrollment="$PAIRING_ORIGIN"
+		[ -s "$token_path" ] || base="$PAIRING_ORIGIN"
+		if ! install_pairing_trust "$pair_stage"; then
+			release_ui_lock
+			json_reply_error CLOUD_TRUST_INSTALL_FAILED 'Cloud trust could not be installed. No connection settings were changed.'
+			return
+		fi
+	fi
 	case "$base" in
 		https://*) ;;
 		*)
@@ -492,15 +622,26 @@ pair_cloud() {
 	remember_option nexus_cloud main enrollment_url old_pair_enrollment
 	remember_option nexus_cloud main pairing_code old_pair_code
 	remember_option nexus_cloud main enabled old_pair_enabled
-	[ -n "$(uci_value nexus_cloud main base_url '')" ] || uci set "nexus_cloud.main.base_url=$base"
-	[ -z "$enrollment" ] || [ -n "$(uci_value nexus_cloud main enrollment_url '')" ] || uci set "nexus_cloud.main.enrollment_url=$enrollment"
-	uci set "nexus_cloud.main.pairing_code=$code"
-	uci set nexus_cloud.main.enabled=1
-	if ! uci commit nexus_cloud || ! reload_feature cloud || ! wait_for_feature cloud 1; then
+	remember_option nexus_cloud main ca_file old_pair_ca
+	remember_option nexus_cloud main public_ca_file old_pair_public_ca
+	remember_option nexus_cloud main identity_mode old_pair_identity
+	uci set "nexus_cloud.main.base_url=$base" || result=1
+	[ -z "$enrollment" ] || uci set "nexus_cloud.main.enrollment_url=$enrollment" || result=1
+	if [ "$is_link" = 1 ]; then
+		uci set "nexus_cloud.main.ca_file=$PAIRING_EDGE_CA" || result=1
+		uci set "nexus_cloud.main.public_ca_file=$PAIRING_PUBLIC_CA" || result=1
+		uci set nexus_cloud.main.identity_mode=managed || result=1
+	fi
+	uci set "nexus_cloud.main.pairing_code=$code" || result=1
+	uci set nexus_cloud.main.enabled=1 || result=1
+	if [ "$result" != 0 ] || ! uci commit nexus_cloud || ! reload_feature cloud || ! wait_for_feature cloud 1; then
 		restore_option nexus_cloud main base_url old_pair_base
 		restore_option nexus_cloud main enrollment_url old_pair_enrollment
 		restore_option nexus_cloud main pairing_code old_pair_code
 		restore_option nexus_cloud main enabled old_pair_enabled
+		restore_option nexus_cloud main ca_file old_pair_ca
+		restore_option nexus_cloud main public_ca_file old_pair_public_ca
+		restore_option nexus_cloud main identity_mode old_pair_identity
 		uci commit nexus_cloud
 		reload_feature cloud || true
 		release_ui_lock
@@ -518,15 +659,228 @@ refresh_status() {
 	overview
 }
 
+directory_relays() {
+	local action="$1" config enabled mode expected current request output
+	[ -f /usr/lib/nexus-directory/relay-catalog.js ] && command -v node >/dev/null 2>&1 || {
+		json_reply_error DIRECTORY_COMPONENT_MISSING 'Install or upgrade the Directory package first.'; return
+	}
+	if [ "$action" = set ]; then
+		json_load "$(cat)" || { json_reply_error INVALID_REQUEST 'Invalid request.'; return; }
+		json_get_var expected expected_generation
+		json_get_var request catalog_json
+		[ "${#request}" -le 32768 ] || { json_reply_error INVALID_REQUEST 'Relay list is too large.'; return; }
+	fi
+	acquire_ui_lock || { json_reply_error BUSY 'Another configuration change is in progress.'; return; }
+	current="$(config_generation)"
+	if [ "$action" = set ] && { [ "$expected" != "$current" ] || [ -n "$(uci changes nexus_roles)" ]; }; then
+		release_ui_lock; json_reply_error CONFIGURATION_CHANGED 'Refresh or apply pending role settings before editing Relays.'; return
+	fi
+	config="$(uci_value nexus_roles directory config_file /etc/nexus-directoryd/directory.json)"
+	enabled="$(uci_bool nexus_roles directory enabled 0)"
+	mode="$(uci_value nexus_roles main mode '')"
+	case "$mode" in all|node-directory) enabled=1 ;; node|node-relay) enabled=0 ;; esac
+	output="$(printf '%s' "$request" | node /usr/lib/nexus-directory/relay-catalog.js "$action" "$config" "$enabled" 2>/dev/null)"
+	if json_load "$output"; then
+		json_add_int generation "$(config_generation)"
+		json_dump
+	else
+		json_reply_error DIRECTORY_CONFIG_UNAVAILABLE 'Could not read or apply the Directory configuration.'
+	fi
+	release_ui_lock
+}
+
+mesh_status() {
+	local seed='{}' client='{}' configured=0 can_create=0 can_join=0 code=FIRMWARE_UPGRADE_REQUIRED
+	local relay=0 directory=0 lan=0 client_state=not_joined link='' generation
+	local client_configured=0 client_enabled
+	client_enabled="$(uci_bool agent main open_mesh_relay_enabled 0)"
+	if [ -r /usr/lib/nexus-agent-roles/mesh-link.sh ]; then
+		. /usr/lib/nexus-agent-roles/mesh-link.sh
+		seed="$(mesh_seed_status 2>/dev/null)" && configured=1
+		mesh_seed_preflight && can_create=1
+		code="$MESH_SETUP_CODE"
+		[ "$configured" != 1 ] || can_create=0
+		mesh_ipv4_valid "$(uci_value network lan ipaddr '' | cut -d/ -f1)" && lan=1
+		[ "$(uci_bool agent main router_network_enabled 1)" = 1 ] && can_join=1
+	fi
+	service_running nexus-relayd && relay=1
+	service_running nexus-directoryd && directory=1
+	client="$(ubus -S call agent open_mesh_relay '{}' 2>/dev/null)" || client='{}'
+	if [ -n "$(uci_value agent main open_mesh_directory_endpoints '')" ]; then
+		client_configured=1
+		client_state=connecting
+		if [ "$client_enabled" != 1 ]; then client_state=disconnected
+		elif [ "$can_join" != 1 ]; then client_state=paused
+		elif [ "$(jsonfilter_value "$client" '@.enabled')" != true ]; then client_state=unavailable
+		elif [ "$(jsonfilter_value "$client" '@.assignment_active')" = true ]; then client_state=assigned
+			[ "$(jsonfilter_value "$client" '@.tunnel_connected')" != true ] || client_state=connected
+		else
+			case "$(jsonfilter_value "$client" '@.phase')" in backoff|failed|error) client_state=retrying ;; esac
+		fi
+	fi
+	link="$(jsonfilter_value "$seed" '@.join_link')"
+	generation="$(config_generation)"
+	json_init
+	json_add_boolean configured "$configured"
+	json_add_boolean can_create "$can_create"
+	json_add_boolean can_join "$can_join"
+	json_add_boolean lan_address_available "$lan"
+	json_add_boolean relay_running "$relay"
+	json_add_boolean directory_running "$directory"
+	json_add_string code "$code"
+	json_add_string client_state "$client_state"
+	json_add_boolean client_configured "$client_configured"
+	json_add_boolean client_enabled "$client_enabled"
+	json_add_string reachability unverified
+	json_add_int generation "$generation"
+	[ -z "$link" ] || json_add_string join_link "$link"
+	# Only public host/port pairs; no role service JSON or credentials.
+	json_add_string share_paths "$(jsonfilter_value "$seed" '@.paths')"
+	json_dump
+}
+
+share_mesh() {
+	local input paths expected profile current
+	input="$(cat)"
+	[ "${#input}" -le 4096 ] || { json_reply_error INVALID_MESH_PATHS 'At most four Mesh access paths are allowed.'; return; }
+	json_load "$input" 2>/dev/null || { json_reply_error INVALID_REQUEST 'Invalid request.'; return; }
+	json_get_var paths paths_json
+	json_get_var expected expected_generation
+	[ -x /usr/sbin/agent-mesh-profile ] && [ -f /usr/lib/nexus-agent-roles/mesh-profile.js ] || {
+		json_reply_error FIRMWARE_UPGRADE_REQUIRED 'Update the Router packages first.'; return;
+	}
+	acquire_ui_lock || { json_reply_error BUSY 'Another change is in progress.'; return; }
+	current="$(config_generation)"
+	if [ "$expected" != "$current" ] || [ -n "$(uci changes nexus_roles)" ]; then
+		release_ui_lock; json_reply_error CONFIGURATION_CHANGED 'Refresh before changing Mesh sharing.'; return
+	fi
+	profile="$(printf '%s' "$paths" | node /usr/lib/nexus-agent-roles/mesh-profile.js 2>/dev/null | /usr/sbin/agent-mesh-profile)"
+	if [ -z "$profile" ]; then
+		release_ui_lock; json_reply_error INVALID_MESH_PATHS 'Use up to four valid domain/IP and service port pairs. Existing sharing settings were kept.'; return
+	fi
+	remember_option nexus_roles main mesh_share_paths old_share_paths
+	if ! uci set "nexus_roles.main.mesh_share_paths=$paths" || ! uci commit nexus_roles; then
+		restore_option nexus_roles main mesh_share_paths old_share_paths; uci commit nexus_roles
+		release_ui_lock; json_reply_error APPLY_FAILED 'Could not save Mesh sharing.'; return
+	fi
+	release_ui_lock; json_reply_ok share_saved
+}
+
+wait_for_mesh_client() {
+	local enabled="$1" attempt=0 state expected=false
+	[ "$enabled" != 1 ] || expected=true
+	# Verify only the applied client gate. Joining an external Directory is
+	# asynchronous, not a local-service health check or proof of remote reachability.
+	while [ "$attempt" -lt 5 ]; do
+		state="$(ubus -S call agent open_mesh_relay '{}' 2>/dev/null)" || state='{}'
+		if [ "$(jsonfilter_value "$state" '@.enabled')" = "$expected" ]; then
+			if [ "$enabled" = 1 ] || [ "$(jsonfilter_value "$state" '@.assignment_active')" = false ]; then return 0; fi
+		fi
+		attempt=$((attempt + 1)); sleep 1
+	done
+	return 1
+}
+
+setup_mesh() {
+	local input action link expected current output result=0 address target state
+	input="$(cat)"
+	json_load "$input" 2>/dev/null || { json_reply_error INVALID_REQUEST 'Invalid Mesh request.'; return; }
+	json_get_var action action
+	json_get_var link join_link
+	json_get_var address advertised_ipv4
+	json_get_var expected expected_generation
+	case "$action" in create|join|disconnect|reconnect) ;; *) json_reply_error INVALID_REQUEST 'Choose a supported Mesh action.'; return ;; esac
+	case "$action" in create|join)
+		[ -r /usr/lib/nexus-agent-roles/mesh-link.sh ] || { json_reply_error FIRMWARE_UPGRADE_REQUIRED 'Update the Router package.'; return; }
+		. /usr/lib/nexus-agent-roles/mesh-link.sh ;;
+	esac
+	if [ "$action" = join ] && ! mesh_link_parse "$link"; then
+		json_reply_error INVALID_MESH_LINK 'Paste a complete Open Mesh join link. Cloud pairing links are not Mesh links.'; return
+	fi
+	case "$address" in *[!0-9.]*) json_reply_error INVALID_REQUEST 'Use a reachable IPv4 address, or leave it empty for LAN.'; return ;; esac
+	acquire_ui_lock || { json_reply_error BUSY 'Another configuration change is in progress.'; return; }
+	current="$(config_generation)"
+	if [ -z "$expected" ] || [ "$expected" != "$current" ]; then
+		release_ui_lock; json_reply_error CONFIGURATION_CHANGED 'Refresh before setting up Mesh.'; return
+	fi
+	case "$action" in join|reconnect)
+		if [ "$(uci_bool agent main router_network_enabled 1)" != 1 ]; then
+			release_ui_lock; json_reply_error ROUTER_NETWORK_DISABLED 'Enable Router network before joining a Mesh.'; return
+		fi ;;
+	esac
+	case "$action" in disconnect|reconnect)
+		if [ -n "$(uci changes agent)" ]; then
+			release_ui_lock; json_reply_error CONFIGURATION_CHANGED 'Apply or discard pending Router settings first.'; return
+		fi
+		if [ -z "$(uci_value agent main open_mesh_directory_endpoints '')" ]; then
+			release_ui_lock; json_reply_error MESH_NOT_JOINED 'No saved Mesh connection. Join a Mesh first.'; return
+		fi
+		target=0; state=disconnected
+		[ "$action" != reconnect ] || { target=1; state=connecting; }
+		if [ "$(uci_bool agent main open_mesh_relay_enabled 0)" = "$target" ] && wait_for_mesh_client "$target"; then
+			release_ui_lock; json_reply_ok "$state"; return
+		fi
+		remember_option agent main open_mesh_relay_enabled old_mesh_enabled
+		uci set "agent.main.open_mesh_relay_enabled=$target" || result=1
+		if [ "$result" != 0 ] || ! uci commit agent || ! reload_feature router_network || ! wait_for_mesh_client "$target"; then
+			restore_option agent main open_mesh_relay_enabled old_mesh_enabled
+			uci commit agent; reload_feature router_network || true
+			release_ui_lock; json_reply_error MESH_SETUP_FAILED 'Mesh connection change failed and was rolled back.'; return
+		fi
+		release_ui_lock; json_reply_ok "$state"; return ;;
+	esac
+	if [ "$action" = create ]; then
+		if ! mesh_seed_preflight; then
+			release_ui_lock; json_reply_error "$MESH_SETUP_CODE" 'Seed prerequisites changed. Reload the setup check; nothing was changed.'; return
+		fi
+		if ! mesh_ipv4_valid "${address:-$(uci_value network lan ipaddr '' | cut -d/ -f1)}"; then
+			release_ui_lock; json_reply_error SEED_ADDRESS_REQUIRED 'A reachable seed IPv4 address is required.'; return
+		fi
+		# Script owns validation, idempotency, rollback and TLS health checks.
+		output="$(/usr/sbin/nexus-open-mesh-seed-setup "$address" 2>/dev/null)" || result=1
+	else
+		if [ -n "$(uci changes agent)" ]; then
+			release_ui_lock; json_reply_error CONFIGURATION_CHANGED 'Apply or discard pending Router settings before joining Mesh.'; return
+		fi
+		remember_option agent main open_mesh_relay_enabled old_mesh_enabled
+		remember_option agent main open_mesh_directory_endpoints old_mesh_endpoint
+		remember_option agent main open_mesh_directory_connect_ipv4s old_mesh_connect
+		remember_option agent main open_mesh_join_profile old_mesh_profile
+		uci set agent.main.open_mesh_relay_enabled=1 || result=1
+		uci set "agent.main.open_mesh_directory_endpoints=$MESH_ENDPOINT" || result=1
+		uci set "agent.main.open_mesh_directory_connect_ipv4s=$MESH_CONNECT" || result=1
+		uci set "agent.main.open_mesh_join_profile=$MESH_PROFILE" || result=1
+		if [ "$result" != 0 ] || ! uci commit agent || ! reload_feature router_network || ! wait_for_mesh_client 1; then
+			restore_option agent main open_mesh_relay_enabled old_mesh_enabled
+			restore_option agent main open_mesh_directory_endpoints old_mesh_endpoint
+			restore_option agent main open_mesh_directory_connect_ipv4s old_mesh_connect
+			restore_option agent main open_mesh_join_profile old_mesh_profile
+			uci commit agent; reload_feature router_network || true
+			result=1
+		fi
+	fi
+	release_ui_lock
+	if [ "$result" != 0 ]; then
+		json_reply_error MESH_SETUP_FAILED 'Mesh setup failed. Install the seed profile to host a seed; existing custom configurations are never overwritten. Check Developer diagnostics.'
+	elif [ "$action" = create ]; then printf '%s\n' "$output"
+	else json_reply_ok connecting
+	fi
+}
+
 case "$1" in
 	list)
-		printf '%s\n' '{"overview":{},"set_feature":{"feature":"","enabled":true,"expected_generation":32},"pair_cloud":{"pairing_code":"","expected_generation":32},"refresh":{}}'
+		printf '%s\n' '{"overview":{},"set_feature":{"feature":"","enabled":true,"expected_generation":32},"pair_cloud":{"pairing_code":"","expected_generation":32},"mesh_status":{},"setup_mesh":{"action":"","join_link":"","advertised_ipv4":"","expected_generation":32},"share_mesh":{"paths_json":"","expected_generation":32},"directory_relays":{},"set_directory_relays":{"catalog_json":"","expected_generation":32},"refresh":{}}'
 		;;
 	call)
 		case "$2" in
 			overview) overview ;;
 			set_feature) set_feature ;;
 			pair_cloud) pair_cloud ;;
+			mesh_status) mesh_status ;;
+			setup_mesh) setup_mesh ;;
+			share_mesh) share_mesh ;;
+			directory_relays) directory_relays get ;;
+			set_directory_relays) directory_relays set ;;
 			refresh) refresh_status ;;
 			*) exit 1 ;;
 		esac

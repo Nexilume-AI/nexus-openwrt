@@ -12,6 +12,7 @@
 #define AGENT_RELAY_TUNNEL_MAX_FRAME_SIZE \
     (AGENT_RELAY_TUNNEL_HEADER_SIZE + AGENT_RELAY_TUNNEL_MAX_DATA)
 #define AGENT_RELAY_TUNNEL_MAX_STREAMS 32U
+#define AGENT_RELAY_TUNNEL_RESET_HISTORY (AGENT_RELAY_TUNNEL_MAX_STREAMS * 2U)
 #define AGENT_RELAY_TUNNEL_ROUTER_ID_LEN 65U
 #define AGENT_RELAY_TUNNEL_INTENT_LEN 128U
 #define AGENT_RELAY_TUNNEL_TASK_ID_LEN 65U
@@ -105,6 +106,14 @@ struct agent_relay_mux_stream {
     bool remote_closed;
 };
 
+/* Credit already granted before a local RESET can still be in flight. Keep
+ * only sequence/credit, never request bodies or an active application slot. */
+struct agent_relay_reset_drain {
+    uint32_t stream_id;
+    uint64_t next_receive_sequence;
+    uint32_t receive_credit;
+};
+
 struct agent_relay_mux {
     bool local_odd;
     uint32_t next_stream_id;
@@ -113,6 +122,8 @@ struct agent_relay_mux {
     size_t stream_limit;
     struct agent_relay_mux_stream streams[AGENT_RELAY_TUNNEL_MAX_STREAMS];
     size_t active_streams;
+    struct agent_relay_reset_drain reset_drains[AGENT_RELAY_TUNNEL_RESET_HISTORY];
+    size_t next_reset_drain;
     uint64_t opened_local;
     uint64_t opened_remote;
     uint64_t frames_sent;
@@ -120,6 +131,9 @@ struct agent_relay_mux {
     uint64_t resets;
     uint64_t protocol_errors;
 };
+
+bool agent_relay_mux_send_credit(
+    const struct agent_relay_mux *mux, uint32_t stream_id, uint32_t *credit);
 
 enum agent_relay_tunnel_result agent_relay_tunnel_message_validate(
     const struct agent_relay_tunnel_message *message

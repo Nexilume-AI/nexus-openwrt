@@ -10,10 +10,10 @@ const DEVELOPER_SECTIONS = {
 
 function target(mode, section) {
 	if (mode !== 'developer')
-		return L.url('admin/status/agent-router/home');
+		return L.url('admin/network/agent-router/home');
 
 	section = DEVELOPER_SECTIONS[section] ? section : 'overview';
-	return L.url('admin/status/agent-router/developer/' + section);
+	return L.url('admin/network/agent-router/developer/' + section);
 }
 
 function developerEnabled() {
@@ -41,6 +41,13 @@ function isDeveloperPath() {
 
 if (isDeveloperPath() && !developerEnabled())
 	window.location.replace(target('user'));
+else if (/\/admin\/status\/agent-router(?:\/|$)/.test(window.location.pathname)) {
+	// Hidden menu aliases keep bookmarks working; move the browser to the
+	// canonical Network URL without enabling Developer mode from a URL.
+	const section = window.location.pathname.match(/\/developer\/([^/]+)\/?$/);
+	window.location.replace(isDeveloperPath()
+		? target('developer', section && section[1]) : target('user'));
+}
 
 return baseclass.extend({
 	enterUser() {

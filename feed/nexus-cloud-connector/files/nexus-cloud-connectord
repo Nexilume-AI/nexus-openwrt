@@ -104,10 +104,14 @@ safe_path() {
 }
 
 b64_encode() {
+	# POSIX read treats TAB as IFS whitespace and collapses empty columns.
+	# '-' is outside the base64 alphabet: preserve optional empty fields.
+	[ -n "$1" ] || { printf '%s' '-'; return; }
 	printf '%s' "$1" | openssl base64 -A
 }
 
 b64_decode() {
+	[ "$1" != '-' ] || return 0
 	printf '%s' "$1" | openssl base64 -A -d 2>/dev/null
 }
 
@@ -457,6 +461,8 @@ load_configuration() {
 	config_get client_key main client_key /etc/nexus-cloud/device.key
 	config_get identity_mode main identity_mode managed
 	config_get ca_file main ca_file /etc/ssl/certs/ca-certificates.crt
+	config_get public_ca_file main public_ca_file ''
+	[ -n "$public_ca_file" ] || public_ca_file="$ca_file"
 	config_get device_cert_sha256 main device_cert_sha256 ''
 	config_get mcp_path main mcp_path /mcp/
 
@@ -510,7 +516,7 @@ load_configuration() {
 	[ -n "$router_id" ] && [ -n "$domain_id" ] || return 1
 	safe_line "$router_id" && safe_line "$domain_id" || return 1
 	safe_path "$token_file" && safe_path "$node_id_file" && safe_path "$client_cert" &&
-		safe_path "$client_key" && safe_path "$ca_file" && safe_path "$mtls_server_cert" &&
+		safe_path "$client_key" && safe_path "$ca_file" && safe_path "$public_ca_file" && safe_path "$mtls_server_cert" &&
 		safe_path "$mtls_server_key" && safe_path "$mtls_client_ca" || return 1
 	case "$token_file:$node_id_file" in /etc/nexus-cloud/*:/etc/nexus-cloud/*) ;; *) return 1 ;; esac
 	case "$identity_mode" in managed|manual) ;; *) return 1 ;; esac
@@ -524,9 +530,11 @@ load_configuration() {
 
 curl_request() {
 	local method="$1" url="$2" payload="$3" response="$4" authenticated="$5"
-	local curl_config=$RUNTIME_DIR/curl.$$.conf token=''
+	local curl_config=$RUNTIME_DIR/curl.$$.conf token='' request_ca="$ca_file"
+	[ "$authenticated" -eq 1 ] || request_ca="$public_ca_file"
 	LAST_HTTP_CODE=0
 	LAST_ERROR_CODE=''
+	[ -r "$request_ca" ] || return 1
 	umask 077
 	{
 		printf 'silent\nshow-error\n'
@@ -537,8 +545,8 @@ curl_request() {
 		printf 'output = "%s"\n' "$response"
 		printf 'write-out = "%%{http_code}"\n'
 		printf 'header = "Content-Type: application/json"\n'
-		[ -r "$ca_file" ] && printf 'cacert = "%s"\n' "$ca_file"
-		if [ -r "$client_cert" ] && [ -r "$client_key" ]; then
+		[ -r "$request_ca" ] && printf 'cacert = "%s"\n' "$request_ca"
+		if [ "$authenticated" -eq 1 ] && [ -r "$client_cert" ] && [ -r "$client_key" ]; then
 			printf 'cert = "%s"\n' "$client_cert"
 			printf 'key = "%s"\n' "$client_key"
 		fi
@@ -664,15 +672,15 @@ configure_edge_auth() {
 	safe_line "$issuer" && safe_line "$audience" || return 1
 	case "$issuer" in https://*) ;; *) return 1 ;; esac
 	case "$issuer:$audience" in *'"'*|*'\'*|*" "*) return 1 ;; esac
-	case "$ca_file" in /etc/ssl/certs/*|/etc/agent-gw/*) ;; *) return 1 ;; esac
+	case "$public_ca_file" in /etc/ssl/certs/*|/etc/agent-gw/*) ;; *) return 1 ;; esac
 	case "$enrollment_url" in https://*/*) return 1 ;; https://*) ;; *) return 1 ;; esac
 	uci set agent_gateway.main.auth_mode=jwt
 	uci set agent_gateway.main.jwt_required=1
 	uci set agent_gateway.main.jwt_jwks_url="$enrollment_url$jwks_path"
 	uci set agent_gateway.main.jwt_jwks_file=/etc/agent-gw/nexus-cloud-jwks.json
-	uci set agent_gateway.main.jwt_jwks_ca_file="$ca_file"
+	uci set agent_gateway.main.jwt_jwks_ca_file="$public_ca_file"
 	uci set agent_gateway.main.cloud_public_origin="$enrollment_url"
-	uci set agent_gateway.main.cloud_trust_ca_file="$ca_file"
+	uci set agent_gateway.main.cloud_trust_ca_file="$public_ca_file"
 	uci set agent_gateway.main.jwt_issuer="$issuer"
 	uci set agent_gateway.main.jwt_audience="$audience"
 	uci commit agent_gateway
@@ -690,16 +698,16 @@ configure_edge_auth() {
 synchronize_gateway_cloud_trust() {
 	local current_origin current_ca_file changed=0
 	case "$enrollment_url" in https://*/*) return 1 ;; https://*) ;; *) return 1 ;; esac
-	case "$ca_file" in /etc/ssl/certs/*|/etc/agent-gw/*) ;; *) return 1 ;; esac
-	[ -f "$ca_file" ] && [ ! -L "$ca_file" ] || return 1
+	case "$public_ca_file" in /etc/ssl/certs/*|/etc/agent-gw/*) ;; *) return 1 ;; esac
+	[ -f "$public_ca_file" ] && [ ! -L "$public_ca_file" ] || return 1
 	current_origin="$(uci -q get agent_gateway.main.cloud_public_origin 2>/dev/null || true)"
 	current_ca_file="$(uci -q get agent_gateway.main.cloud_trust_ca_file 2>/dev/null || true)"
 	if [ "$current_origin" != "$enrollment_url" ]; then
 		uci set agent_gateway.main.cloud_public_origin="$enrollment_url" || return 1
 		changed=1
 	fi
-	if [ "$current_ca_file" != "$ca_file" ]; then
-		uci set agent_gateway.main.cloud_trust_ca_file="$ca_file" || return 1
+	if [ "$current_ca_file" != "$public_ca_file" ]; then
+		uci set agent_gateway.main.cloud_trust_ca_file="$public_ca_file" || return 1
 		changed=1
 	fi
 	[ "$changed" -eq 1 ] || return 0
@@ -1384,25 +1392,18 @@ enroll_node() {
 		write_status pairing_required "Paste a one-time pairing code from Nexus Console." 0 0 0
 		return 1
 	}
-	if [ "$REENROLLING" -eq 1 ] && [ "$identity_mode" = managed ]; then
+	# Every managed pairing obtains a certificate from the current Cloud. A
+	# locally valid leftover certificate may belong to a retired Cloud CA;
+	# enrolling only its fingerprint would succeed but all mTLS calls fail.
+	if [ "$identity_mode" = managed ]; then
 		csr_file="$(prepare_managed_identity)" || {
-			write_status certificate_generation_failed "Could not generate the replacement device certificate request." 0 0 0
+			write_status certificate_generation_failed "Could not generate the local device key and certificate request." 0 0 0
 			return 1
 		}
 		fingerprint=''
 	elif fingerprint="$(certificate_thumbprint 2>/dev/null)" && [ -r "$client_key" ] &&
 		certificate_key_matches "$client_cert" "$client_key"; then
 		:
-	elif [ "$identity_mode" = managed ]; then
-		if [ -s "$client_cert" ]; then
-			write_status certificate_key_mismatch "The saved device certificate does not match its private key. Remove or repair the managed identity before pairing." 0 0 0
-			return 1
-		fi
-		csr_file="$(prepare_managed_identity)" || {
-			write_status certificate_generation_failed "Could not generate the local device key and certificate request." 0 0 0
-			return 1
-		}
-		fingerprint=''
 	else
 		write_status certificate_required "Manual identity requires a readable device certificate and private key." 0 0 0
 		return 1

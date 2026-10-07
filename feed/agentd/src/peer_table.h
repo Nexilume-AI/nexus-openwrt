@@ -54,6 +54,9 @@ struct agent_peer {
     /* True only for a Relay assignment obtained from the dedicated
      * Open Mesh Directory endpoint. Cloud Relay peers always keep this false. */
     bool open_mesh;
+    /* Local v2 join-profile binding; never inherited from peer advertisements. */
+    char mesh_connect_host[128];
+    char mesh_tls_sha256[65];
     uint64_t snapshot_id;
     uint64_t snapshots_completed;
     struct agent_peer *next;

@@ -41,7 +41,7 @@ function loadConfig(filename) {
     "ticketTtlSeconds", "maxConnections", "capture", "relays", "identities",
     "cardTrust", "openMesh"], "config");
   strictKeys(config.tls, ["key", "cert", "ca"], "tls");
-  if (net.isIP(config.listen) !== 4 ||
+  if (net.isIP(config.listen) === 0 ||
       !validIdentifier(config.activeTicketKeyId, 32)) throw new Error("invalid Directory identity");
   config.directoryId = config.directoryId || "directory-standalone";
   if (!validIdentifier(config.directoryId, 64)) throw new Error("invalid Directory replica ID");

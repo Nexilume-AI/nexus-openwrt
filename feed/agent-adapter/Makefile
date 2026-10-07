@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=agent-adapter
 PKG_VERSION:=0.6.0
-PKG_RELEASE:=7
+PKG_RELEASE:=9
 
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team

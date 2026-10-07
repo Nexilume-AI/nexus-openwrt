@@ -108,6 +108,8 @@ start_service() {
 	config_get public_ca_bundle_id main public_ca_bundle_id
 	config_get public_ingress_port main public_ingress_port 7443
 	config_get_bool lan_sdk_enabled main lan_sdk_enabled 0
+	. /usr/libexec/nexus-agent-lan-auth.sh
+	prepare_lan_only_auth || return 1
 	config_get cloud_public_origin main cloud_public_origin ''
 	config_get cloud_trust_ca_file main cloud_trust_ca_file \
 		/etc/ssl/certs/ca-certificates.crt
@@ -126,6 +128,13 @@ start_service() {
 	lan_bridge_token_file=/var/run/agent-gw/lan-bridge.token
 	lan_session_key_file=/var/run/agent-gw/lan-session.key
 	config_get_bool internal_invoke_enabled main internal_invoke_enabled 0
+	# Product pause remains authoritative if the connector later reconciles
+	# its own invoke settings. It does not remove enrollment or trust material.
+	if [ "$(uci -q get agent_gateway.main.services_enabled)" = 0 ]; then
+		invoke_enabled=0; registration_enabled=0; stream_enabled=0
+		lan_sdk_enabled=0; internal_invoke_enabled=0
+		forwarding_assertion_enabled=0; retry_enabled=0; public_descriptor_enabled=0
+	fi
 	config_get internal_invoke_token_digest_file main \
 		internal_invoke_token_digest_file \
 		/etc/agent-gw/nexus-cloud-gateway-token.sha256
@@ -160,6 +169,8 @@ start_service() {
 	config_get_bool jail main jail 1
 	config_load agent
 	config_get_bool public_ingress_enabled main public_ipv6_enabled 0
+	# IPv6 allocation may be enabled before Agent services are enabled.
+	[ "$invoke_enabled" -eq 1 ] || public_ingress_enabled=0
 	config_load agent_gateway
 	case "$public_ingress_token_file" in
 		/var/run/agent-gw/*) ;;

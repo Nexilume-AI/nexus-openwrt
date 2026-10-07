@@ -32,6 +32,9 @@ if [ "$before" != "$after" ]; then
 	logger -t agent-public-ipv6 "network state changed on $INTERFACE ($ACTION): $code"
 	/etc/init.d/agent-netd restart >/dev/null 2>&1
 	/etc/init.d/agentd restart >/dev/null 2>&1
+	# Ingress validates destination addresses against this same live prefix.
+	# Recreate its listener/bridge when a prefix appears, changes or disappears.
+	/etc/init.d/agent-edge restart >/dev/null 2>&1
 elif [ "$ready" = true ] || [ "$ready" = 1 ]; then
 	ubus -S call agent.netd status >/dev/null 2>&1 || \
 		/etc/init.d/agent-netd restart >/dev/null 2>&1

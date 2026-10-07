@@ -385,6 +385,14 @@ function testConfigAndCertificateIdentity() {
   assert.strictEqual(loaded.relayId, "relay-p43");
   fs.writeFileSync(filename, `\uFEFF${JSON.stringify(config)}`, "utf8");
   assert.strictEqual(loadConfig(filename).relayId, "relay-p43");
+  for (const listen of ["::", "::1", "fd74:6e65:7875::2"]) {
+    fs.writeFileSync(filename, JSON.stringify({ ...config, listen }));
+    assert.strictEqual(loadConfig(filename).listen, listen);
+  }
+  for (const listen of ["localhost", "[::1]", "2001:db8::bad::", ""] ) {
+    fs.writeFileSync(filename, JSON.stringify({ ...config, listen }));
+    assert.throws(() => loadConfig(filename), /invalid Relay address or identity/);
+  }
   const socket = {
     authorized: true,
     alpnProtocol: "h2",

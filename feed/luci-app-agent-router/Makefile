@@ -5,9 +5,13 @@ LUCI_DEPENDS:=+luci-base +agentd +agent-netd +agent-gw +agent-adapter +nexus-age
 LUCI_PKGARCH:=all
 
 PKG_VERSION:=3.1.0
-PKG_RELEASE:=22
+PKG_RELEASE:=36
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
+
+define Build/Prepare/luci-app-agent-router
+	find $(PKG_BUILD_DIR)/htdocs -type f -name '*.js' -exec sed -i 's/#PKG_VERSION/$(PKG_VERSION)-r$(PKG_RELEASE)/g' {} +
+endef
 
 define Package/luci-app-agent-router/conffiles
 /etc/config/agent

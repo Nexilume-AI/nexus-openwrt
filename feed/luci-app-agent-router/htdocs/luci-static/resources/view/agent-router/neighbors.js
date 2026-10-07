@@ -8,7 +8,6 @@
 const LIST_LIMIT = 200;
 const callNeighbors = rpc.declare({ object: 'agent', method: 'neighbors', params: [ 'limit' ], expect: {} });
 const callDiscoveries = rpc.declare({ object: 'agent', method: 'discoveries', params: [ 'limit' ], expect: {} });
-const callCrossDiscoveries = rpc.declare({ object: 'agent', method: 'cross_discoveries', params: [ 'limit' ], expect: {} });
 
 function settle(name, promise, fallback) {
 	return promise.then(data => ({ name: name, ok: true, data: data }), error => ({
@@ -49,14 +48,13 @@ function neighborRows(result) {
 	});
 }
 
-function discoveryRows(result, cross) {
-	const values = cross ? (result.cross_discoveries || result.discoveries || []) : (result.discoveries || []);
-	return values.map(function(item) {
-		const endpoint = cross ? ((item.target || '—') + ':' + (item.port || 0)) : ((item.ipv4 || item.hostname || '—') + ':' + (item.port || 0));
+function discoveryRows(result) {
+	return (result.discoveries || []).map(function(item) {
+		const endpoint = (item.ipv4 || item.hostname || '—') + ':' + (item.port || 0);
 		return E('tr', {}, [
 			E('td', {}, [E('code', {}, item.router_id || '—'), E('div', { 'class': 'ar-muted' }, item.domain_id || '—')]),
 			E('td', {}, endpoint),
-			E('td', {}, cross ? statusBadge(!!item.dnssec_secure, item.dnssec_secure ? _('DNSSEC secure') : _('Rejected')) : (item.interface || '—')),
+			E('td', {}, item.interface || '—'),
 			E('td', {}, item.promoted ? statusBadge(true, _('Promoted')) : statusBadge(!!item.auto_promotion_eligible, item.auto_promotion_eligible ? _('Eligible') : _('Observed'))),
 			E('td', {}, Math.max(0, Math.round(Number(item.remaining_ms || 0) / 1000)) + ' s')
 		]);
@@ -77,19 +75,17 @@ return view.extend({
 	load() {
 		return Promise.all([
 			settle('neighbors', callNeighbors(LIST_LIMIT), { neighbors: [] }),
-			settle('LAN discovery', callDiscoveries(LIST_LIMIT), { discoveries: [] }),
-			settle('cross-domain discovery', callCrossDiscoveries(LIST_LIMIT), { cross_discoveries: [] })
+			settle('LAN discovery', callDiscoveries(LIST_LIMIT), { discoveries: [] })
 		]);
 	},
 
 	renderBody(data) {
 		const peers = data[0].data || {};
 		const lan = data[1].data || {};
-		const cross = data[2].data || {};
 		const failures = data.filter(item => !item.ok);
 		return [
 			E('div', { 'class': 'ar-hero' }, [
-				E('div', {}, [E('h2', {}, _('Neighbors & Discovery')), E('p', {}, _('ARPX session state and admitted LAN or DNSSEC discovery metadata. Discovery does not itself create capability routes.'))]),
+				E('div', {}, [E('h2', {}, _('Neighbors & Discovery')), E('p', {}, _('Connected Router sessions and LAN discovery candidates. Agent capabilities are exchanged after a peer connects.'))]),
 				E('span', { 'class': 'ar-phase' }, _('%s sessions').format((peers.neighbors || []).filter(p => p.session_up).length))
 			])
 		].concat(failures.map(function(item) {
@@ -98,8 +94,7 @@ return view.extend({
 			]);
 		})).concat([
 			section(_('ARPX neighbors'), neighborRows(peers), _('No peers are configured or promoted.')),
-			section(_('LAN DNS-SD candidates'), discoveryRows(lan, false), lan.enabled === false ? _('LAN discovery is disabled.') : _('No LAN candidates are currently leased.')),
-			section(_('Cross-domain SVCB candidates'), discoveryRows(cross, true), cross.enabled === false ? _('Cross-domain discovery is disabled.') : _('No DNSSEC-validated candidates are currently leased.')),
+			section(_('LAN DNS-SD candidates'), discoveryRows(lan), lan.enabled === false ? _('LAN discovery is disabled.') : _('No LAN candidates are currently leased.')),
 			E('p', { 'class': 'ar-muted' }, _('Updated %s').format(new Date().toLocaleTimeString()))
 		]);
 	},

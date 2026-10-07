@@ -42,6 +42,8 @@ config_load nexus_cloud
 config_get base_url main base_url ''
 config_get enrollment_url main enrollment_url ''
 config_get ca_file main ca_file /etc/ssl/certs/ca-certificates.crt
+config_get public_ca_file main public_ca_file ''
+[ -n "$public_ca_file" ] || public_ca_file="$ca_file"
 config_get client_cert main client_cert /etc/nexus-cloud/device.crt
 config_get client_key main client_key /etc/nexus-cloud/device.key
 config_get identity_mode main identity_mode managed
@@ -187,8 +189,10 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ] && [ -n "$base_url" ] && [ -r "$ca_file" ]; then
-	curl_args="--silent --show-error --connect-timeout 10 --max-time 20 --cacert $ca_file"
-	if [ -s "$client_cert" ] && [ -s "$client_key" ]; then
+	probe_ca="$ca_file"
+	[ -s "$token_file" ] || probe_ca="$public_ca_file"
+	curl_args="--silent --show-error --connect-timeout 10 --max-time 20 --cacert $probe_ca"
+	if [ -s "$token_file" ] && [ -s "$client_cert" ] && [ -s "$client_key" ]; then
 		curl_args="$curl_args --cert $client_cert --key $client_key"
 	fi
 	if curl $curl_args --output /dev/null "$base_url/api/v1/health/" >/dev/null 2>&1; then
@@ -196,7 +200,7 @@ if [ "$FAILED" -eq 0 ] && [ -n "$base_url" ] && [ -r "$ca_file" ]; then
 	else
 		add_check cloud_tls fail "Cloud TLS" "TLS connection failed. Check DNS, time, Cloud CA, and server certificate name."
 	fi
-	if curl $curl_args "$base_url/api/v1/edge/.well-known/jwks.json" 2>/dev/null | grep -q '"keys"'; then
+	if curl --silent --show-error --connect-timeout 10 --max-time 20 --cacert "$public_ca_file" "$enrollment_url/api/v1/edge/.well-known/jwks.json" 2>/dev/null | grep -q '"keys"'; then
 		add_check jwks pass "JWT keys" "The Edge JWKS document is reachable through the same trust path."
 	else
 		add_check jwks fail "JWT keys" "The Edge JWKS document could not be downloaded or is invalid."

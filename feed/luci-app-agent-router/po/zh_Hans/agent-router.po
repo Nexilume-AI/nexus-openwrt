@@ -173,5 +173,629 @@ msgstr "配置自定义 Seed"
 msgid "Open Mesh Relay"
 msgstr "Open Mesh Relay"
 
+msgid "Paste a pairing link from your trusted Nexus Cloud console. It includes the address and certificate trust."
+msgstr "粘贴来自您信任的 Nexus Cloud 控制台的配对链接，其中已包含地址与证书信任信息。"
+
+msgid "Pairing link required"
+msgstr "需要配对链接"
+
+msgid "The pairing link configures the Cloud address and certificate trust automatically."
+msgstr "配对链接会自动配置 Cloud 地址和证书信任。"
+
+msgid "Pairing link"
+msgstr "配对链接"
+
+msgid "Paste the complete pairing link from Nexus Cloud, not a Cloud address or an old pairing code."
+msgstr "请粘贴 Nexus Cloud 生成的完整配对链接，不要填写 Cloud 地址或旧式配对码。"
+
+msgid "Pairing again replaces this Router’s existing Cloud enrollment."
+msgstr "重新配对将替换此路由器现有的 Cloud 注册。"
+
+msgid "Pairing could not be confirmed. Check the connection status before trying again."
+msgstr "无法确认配对结果。请先检查连接状态，再决定是否重试。"
+
+msgid "Cloud pairing unavailable"
+msgstr "暂时无法配对 Cloud"
+
+msgid "Check your configuration permission and refresh the Router status."
+msgstr "请检查配置权限并刷新路由器状态。"
+
+msgid "Connect using a pairing link from Nexus Cloud."
+msgstr "使用 Nexus Cloud 提供的配对链接连接。"
+
+msgid "Publish eligible local Agents through Direct IPv6 or Cloud Relay. The pairing link manages the Cloud address and certificate trust."
+msgstr "通过 Direct IPv6 或 Cloud Relay 发布符合条件的本地 Agent。配对链接自动管理 Cloud 地址和证书信任。"
+
+msgid "Managed Cloud address"
+msgstr "托管 Cloud 地址"
+
+msgid "Read only. To change the Cloud connection, use a new pairing link."
+msgstr "只读。如需更改 Cloud 连接，请使用新的配对链接。"
+
+msgid "Cloud pairing"
+msgstr "Cloud 配对"
+
+msgid "Managed by Nexus Cloud"
+msgstr "由 Nexus Cloud 自动管理"
+
+msgid "Existing identity. Pair again to enable automatic certificate management."
+msgstr "正在使用已有身份。重新配对即可启用证书自动管理。"
+
+msgid "Pairing configures certificates and trust automatically. Managed certificates renew automatically; the private key stays on this Router."
+msgstr "配对会自动配置证书和信任。托管证书自动续期，私钥始终保存在此路由器上。"
+
+msgid "No manual address, port or certificate download is needed."
+msgstr "无需手动填写地址、端口或下载证书。"
+
+msgid "Save & Apply or discard pending configuration changes before pairing."
+msgstr "配对前请先保存并应用，或放弃待处理的配置修改。"
+
+msgid "Could not check pending changes. Refresh this page before pairing."
+msgstr "无法检查待处理修改。请刷新页面后再配对。"
+
+msgid "Trust for authenticated Edge requests. Pairing links configure this automatically."
+msgstr "用于已认证 Edge 请求的信任配置；配对链接会自动配置此项。"
+
+msgid "Public Cloud CA file"
+msgstr "公开 Cloud 入口 CA 文件"
+
+msgid "Status unavailable"
+msgstr "暂时无法获取状态"
+
+msgid "Could not refresh service status. Retrying automatically; no configuration was changed."
+msgstr "无法刷新服务状态，正在自动重试；未修改任何配置。"
+
+msgid "Recovering"
+msgstr "恢复中"
+
+msgid "Last process exit: %s. Automatic retry every %s seconds. If this persists, check the role configuration, certificate permissions and system log."
+msgstr "上次进程退出码：%s。每 %s 秒自动重试。若持续失败，请检查角色配置、证书权限和系统日志。"
+
+msgid "Automatic restart pending (retry interval: %s seconds)."
+msgstr "正在等待自动重启（重试间隔：%s 秒）。"
+
+msgid "Recovery stopped"
+msgstr "恢复已停止"
+
+msgid "The process exited with code %s and automatic recovery is not armed. Save & Apply, then check the system log."
+msgstr "进程退出码为 %s，自动恢复未启用。请保存并应用，然后检查系统日志。"
+
+msgid "No active supervisor. Save & Apply; check storage permissions and the system log if startup fails."
+msgstr "服务未受进程管理器监管。请保存并应用；若启动失败，请检查存储权限和系统日志。"
+
+msgid "Trust for public enrollment, JWKS and SDK bootstrap. Empty reuses the Cloud CA file for legacy installations."
+msgstr "用于公开配对、JWKS 和 SDK 引导的信任配置。留空时兼容旧配置，复用 Cloud CA 文件。"
+
 msgid "Client connection control. Managed seed values require no editing; enable this only when the saved profile or custom Directory URL is ready. Router Roles is only for hosting Relay or Directory services."
 msgstr "客户端连接控制。托管 Seed 参数无需编辑；仅在已保存配置档案或自定义 Directory 地址就绪后启用。Router Roles 仅用于在本机托管 Relay 或 Directory 服务。"
+
+msgid "Cloud authentication needs synchronization"
+msgstr "Cloud 认证配置需要同步"
+
+msgid "Authentication & trust"
+msgstr "认证与信任"
+
+msgid "Cloud pairing manages the caller identity issuer, audience, signing-key refresh and Cloud certificate trust. No token, key URL or certificate path needs to be entered here."
+msgstr "Cloud 配对自动管理调用身份的签发方、受众、签名公钥刷新及 Cloud 证书信任。无需在此填写 Token、公钥地址或证书路径。"
+
+msgid "Cloud calls"
+msgstr "Cloud 调用"
+
+msgid "LAN SDK"
+msgstr "局域网 SDK"
+
+msgid "Automatic LAN authentication"
+msgstr "自动局域网认证"
+
+msgid "Agent services not enabled"
+msgstr "Agent 服务未开启"
+
+msgid "Cloud signing-key refresh"
+msgstr "Cloud 签名公钥刷新"
+
+msgid "LAN Agents obtain short-lived sessions automatically. Cloud pairing is not required for local registration. LAN bootstrap is separate from public and Relay caller authorization. Existing standalone policies are preserved."
+msgstr "局域网 Agent 自动获取短期会话，本地注册不依赖 Cloud 配对。LAN 引导与公网、Relay 调用方授权相互独立；已有独立认证策略保持不变。"
+
+msgid "View Cloud connection"
+msgstr "查看 Cloud 连接"
+
+msgid "Enable Agent services in User mode to make automatic LAN registration available."
+msgstr "请在用户模式中开启 Agent 服务，以启用自动局域网注册。"
+
+msgid "Open User mode"
+msgstr "打开用户模式"
+
+msgid "Allows registration, renewal and withdrawal. LAN SDK credentials are obtained automatically when Agent services is enabled."
+msgstr "允许注册、续租与注销。开启 Agent 服务后，局域网 SDK 自动获取认证凭据。"
+
+msgid "Local routing namespace for protocol requests. Cloud ownership is assigned by the paired Cloud, not by this value."
+msgstr "协议请求使用的本地路由命名空间。Cloud 归属由配对的 Cloud 分配，不由此值决定。"
+
+msgid "System certificate authorities"
+msgstr "系统证书颁发机构"
+
+msgid "Existing administrator-approved trust"
+msgstr "已有管理员批准的信任"
+
+msgid "Read only. HTTPS Agent server certificates are separate from Cloud identity. Existing administrator-approved CA configuration is preserved; Cloud pairing does not authorize arbitrary Agent certificates. Ordinary LAN Agents need no certificate setup."
+msgstr "只读。HTTPS Agent 的服务端证书独立于 Cloud 身份。保留管理员已批准的 CA 配置；Cloud 配对不会自动信任任意 Agent 证书。普通局域网 Agent 无需配置证书。"
+
+msgid "The SDK automatically acquires registration credentials on the trusted LAN listener. This HTTPS server example still requires its own server certificate; Cloud pairing does not replace that certificate."
+msgstr "SDK 在可信局域网入口自动获取注册凭据。此 HTTPS 服务端示例仍需自己的服务证书，Cloud 配对不替代该证书。"
+
+msgid "Agent registration uses automatic LAN authentication. The standalone A2A API caller below is separate: it still needs an authorized caller JWT or Transaction Token. Cloud pairing is not caller authorization. LuCI never stores or displays the token."
+msgstr "Agent 注册使用自动局域网认证。以下独立 A2A API 调用方仍需授权的 JWT 或 Transaction Token。Cloud 配对不等于调用方授权；LuCI 不保存或显示 Token。"
+
+msgid "Cloud-managed configuration"
+msgstr "Cloud 托管配置"
+
+msgid "Existing standalone authentication"
+msgstr "已有独立认证"
+
+msgid "Existing policy: authentication disabled"
+msgstr "已有策略：认证已关闭"
+
+msgid "Read only. Manage Cloud identity through pairing. Agent APIs & Protocols shows authentication status; saving network settings does not change the trust policy."
+msgstr "只读。通过配对管理 Cloud 身份。Agent API 与协议页面显示认证状态，保存网络设置不会改变信任策略。"
+
+msgid "Open Mesh automatically connects validated LAN and seed Routers and exchanges Agent routes. Use Open Mesh Directory and Relay for cross-NAT connectivity. Cloud Relay trust stays separate."
+msgstr "Open Mesh 自动连接已验证的局域网和种子路由器，并交换 Agent 路由。跨 NAT 连接使用 Open Mesh Directory 和 Relay，Cloud Relay 信任保持独立。"
+
+msgid "Connected Router sessions and LAN discovery candidates. Agent capabilities are exchanged after a peer connects."
+msgstr "已连接的路由器会话和局域网发现候选。邻居连接后会交换 Agent 能力。"
+
+msgid "Review LAN candidates, revoke existing peers, and inspect Agent Card and Directory trust evidence."
+msgstr "审核局域网候选、撤销已有邻居，并查看 Agent Card 与 Directory 信任证据。"
+
+msgid "Open Mesh join link"
+msgstr "Open Mesh 加入链接"
+
+msgid "Mesh seed configured"
+msgstr "Mesh Seed 已配置"
+
+msgid "Paste this join link on other routers. It contains public routing information, not Cloud credentials."
+msgstr "在其他路由器粘贴此加入链接。链接包含公开路由信息，不包含 Cloud 凭据。"
+
+msgid "Setup verifies local TLS listeners, not Internet reachability. Check current role status; a seed behind upstream NAT still needs inbound forwarding, or a reachable seed."
+msgstr "初始化验证本地 TLS 监听，不代表互联网可达。请检查当前角色状态；上游 NAT 后的 Seed 仍需要入站转发，或改用可达的 Seed。"
+
+msgid "Select link"
+msgstr "选中链接"
+
+msgid "Done"
+msgstr "完成"
+
+msgid "Automatic LAN address"
+msgstr "自动使用 LAN 地址"
+
+msgid "Reachable seed IPv4 address"
+msgstr "其他节点可达的 Seed IPv4 地址"
+
+msgid "Mesh setup failed."
+msgstr "Mesh 配置失败。"
+
+msgid "Mesh seed saved. Discovery is connecting; use Router network status to check peers."
+msgstr "已保存 Mesh Seed，正在连接发现服务；请在路由器网络状态中检查邻居。"
+
+msgid "Join Mesh"
+msgstr "加入 Mesh"
+
+msgid "Create Mesh seed"
+msgstr "创建 Mesh Seed"
+
+msgid "Join an Open Mesh"
+msgstr "加入 Open Mesh"
+
+msgid "Host a Mesh seed"
+msgstr "提供 Mesh Seed 服务"
+
+msgid "Open Mesh automatically accepts peer routers. This is separate from Nexus Cloud pairing and does not grant Cloud access."
+msgstr "Open Mesh 自动接纳邻居路由器。这与 Nexus Cloud 配对独立，不授予 Cloud 访问权限。"
+
+msgid "Requires the seed installation profile. Certificates, service configuration and local firewall rules are created automatically. Existing custom settings are preserved."
+msgstr "需要安装 Seed 档位。将自动创建证书、服务配置和本机防火墙规则；已有自定义设置将保留。"
+
+msgid "Leave empty for a LAN seed. Across NAT, use an address reachable by the joining routers; upstream NAT forwarding is not automatic."
+msgstr "LAN Seed 可留空。跨 NAT 时填写其他路由器可达的地址；上游 NAT 转发不会自动配置。"
+
+msgid "Open Mesh setup"
+msgstr "Open Mesh 设置"
+
+msgid "Nearby routers discover each other automatically. For different networks, paste a join link from an OpenWrt Mesh seed."
+msgstr "同一 LAN 路由器会自动互相发现。跨网络时，粘贴来自 OpenWrt Mesh Seed 的加入链接。"
+
+msgid "Show join link"
+msgstr "显示加入链接"
+
+msgid "Cloud service started. Check the connection status below."
+msgstr "Cloud 服务已启动，请查看下方的连接状态。"
+
+msgid "Install the Seed profile (nexus-agent-router-seed) from the matching package feed, then check again. Relay, Directory, Node.js and OpenSSL are required."
+msgstr "请从匹配的软件源安装 Seed 档位（nexus-agent-router-seed），然后重新检查。需要 Relay、Directory、Node.js 和 OpenSSL。"
+
+msgid "Configuration changed or there are pending edits. Apply or discard them, then reload the setup check."
+msgstr "配置已变化或存在未保存修改。请应用或放弃修改，再重新检查。"
+
+msgid "An incomplete seed identity exists. Open Developer diagnostics to repair it; setup will not replace existing keys."
+msgstr "发现不完整的 Seed 身份。请进入开发者诊断修复；初始化不会替换已有密钥。"
+
+msgid "Custom role configuration already exists. It is preserved; use Developer mode to manage it."
+msgstr "已有自定义角色配置，将予以保留；请通过开发者模式管理。"
+
+msgid "Configure a WAN firewall zone in OpenWrt Network settings before hosting a seed."
+msgstr "提供 Seed 服务前，请先在 OpenWrt 网络设置中配置 WAN 防火墙区域。"
+
+msgid "Update the Router packages to use guided Mesh setup."
+msgstr "请升级路由器软件包以使用 Mesh 初始化向导。"
+
+msgid "Enter a valid reachable IPv4 address or configure the LAN address first."
+msgstr "请输入有效且可达的 IPv4 地址，或先配置 LAN 地址。"
+
+msgid "Paste a complete nexus-mesh://join/ link. Nexus Cloud pairing links cannot join this Mesh."
+msgstr "请粘贴完整的 nexus-mesh://join/ 链接。Nexus Cloud 配对链接不能用于加入此 Mesh。"
+
+msgid "Enable Router network on the home page before joining a Mesh."
+msgstr "加入 Mesh 前，请在首页开启路由器网络。"
+
+msgid "This router already hosts a seed. Its identity and join link are preserved."
+msgstr "此路由器已配置 Seed，原有身份和加入链接保持不变。"
+
+msgid "Mesh setup failed. Existing configuration was preserved or rolled back. Check service diagnostics before retrying."
+msgstr "Mesh 配置失败。已有配置已保留或回滚，请检查服务诊断后再重试。"
+
+msgid "On another router, open Agent Routing → Open Mesh setup → Join Mesh and paste this link."
+msgstr "在另一台路由器打开 Agent Routing → Open Mesh 设置 → 加入 Mesh，然后粘贴此链接。"
+
+msgid "The link contains public Mesh routing information, not Cloud credentials. Share it only with routers you intend to join this open network."
+msgstr "链接包含公开的 Mesh 路由信息，不含 Cloud 凭据。请仅分享给您允许加入这个开放网络的路由器。"
+
+msgid "Setup verifies local TLS listeners, not Internet reachability. A seed behind upstream NAT still needs inbound forwarding or a reachable seed."
+msgstr "初始化验证本机 TLS 监听，不代表互联网可达。上游 NAT 后的 Seed 仍需要入站转发，或使用可达的 Seed。"
+
+msgid "Not joined"
+msgstr "尚未加入"
+
+msgid "Connecting to Directory"
+msgstr "正在连接 Directory"
+
+msgid "Relay assigned"
+msgstr "已分配 Relay"
+
+msgid "Router network paused"
+msgstr "路由器网络已暂停"
+
+msgid "Connection retrying"
+msgstr "正在重试连接"
+
+msgid "Hosted seed"
+msgstr "本机 Seed"
+
+msgid "Seed configured"
+msgstr "Seed 已配置"
+
+msgid "Not initialized"
+msgstr "尚未初始化"
+
+msgid "Relay"
+msgstr "Relay"
+
+msgid "Running"
+msgstr "运行中"
+
+msgid "Not running"
+msgstr "未运行"
+
+msgid "Directory"
+msgstr "Directory"
+
+msgid "This router as a Mesh client"
+msgstr "本机 Mesh 客户端"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Mesh connection saved"
+msgstr "Mesh 连接已保存"
+
+msgid "Certificates and local services were verified. Share the join link next."
+msgstr "证书和本地服务已验证，下一步请分享加入链接。"
+
+msgid "Configuration saved. Directory discovery connects in the background; this is not yet proof of an end-to-end Agent connection."
+msgstr "配置已保存。Directory 发现会在后台连接，这尚不能证明 Agent 端到端连接已建立。"
+
+msgid "Watch the Mesh client status below, then check Neighbor Routers for learned capabilities."
+msgstr "请查看下方 Mesh 客户端状态，再到邻居路由器检查学习到的能力。"
+
+msgid "The setup response was interrupted. Reload checks to see whether it completed before applying again."
+msgstr "初始化响应中断。再次应用前，请重新检查是否已完成。"
+
+msgid "Applying and verifying…"
+msgstr "正在应用并验证…"
+
+msgid "Review setup"
+msgstr "检查配置"
+
+msgid "Initialize Relay & Directory"
+msgstr "初始化 Relay 与 Directory"
+
+msgid "Apply Mesh connection"
+msgstr "应用 Mesh 连接"
+
+msgid "Relay carries cross-NAT traffic. Directory introduces routers and assigns the Relay. This setup initializes both together."
+msgstr "Relay 承载跨 NAT 流量，Directory 介绍路由器并分配 Relay。本向导会一起初始化两项服务。"
+
+msgid "Leave empty for a LAN seed. For other networks, enter its reachable IPv4 address. Upstream NAT must forward TCP 17444 and 18443 unchanged; setup cannot configure another router."
+msgstr "局域网 Seed 可留空。跨网络使用时请输入可达的 IPv4 地址；上游 NAT 需原端口转发 TCP 17444 和 18443，本向导不能配置另一台路由器。"
+
+msgid "Setup progress"
+msgstr "初始化进度"
+
+msgid "Check & configure"
+msgstr "检查与配置"
+
+msgid "Review"
+msgstr "确认"
+
+msgid "Apply & verify"
+msgstr "应用与验证"
+
+msgid "Checking prerequisites…"
+msgstr "正在检查初始化条件…"
+
+msgid "Changes to apply"
+msgstr "即将应用的修改"
+
+msgid "Create an isolated Mesh CA, configure Relay and Directory, enable both services, and open their two local firewall ports."
+msgstr "创建独立的 Mesh CA，配置 Relay 和 Directory，启用两项服务，并放行本机防火墙的两个服务端口。"
+
+msgid "Replace this router’s Mesh Directory connection with the supplied join link. Existing Cloud pairing and Cloud Relay settings are unchanged."
+msgstr "使用加入链接替换此路由器的 Mesh Directory 连接。已有 Cloud 配对及 Cloud Relay 设置不变。"
+
+msgid "Use the reviewed Mesh join link"
+msgstr "使用已检查的 Mesh 加入链接"
+
+msgid "Cloud identity, Agent configuration and existing custom settings will not be overwritten."
+msgstr "不会覆盖 Cloud 身份、Agent 配置或已有自定义设置。"
+
+msgid "Back"
+msgstr "返回"
+
+msgid "Reload checks"
+msgstr "重新检查"
+
+msgid "Could not check Mesh setup. Retry without changing configuration."
+msgstr "无法检查 Mesh 初始化条件。请重试，不会修改配置。"
+
+msgid "Host a self-managed Relay and Directory, or join an existing Mesh. Nexus Cloud Relay is configured separately."
+msgstr "自建 Relay 和 Directory，或加入已有 Mesh。Nexus Cloud Relay 独立配置。"
+
+msgid "Could not refresh Mesh status. Existing connections were not changed."
+msgstr "无法刷新 Mesh 状态，已有连接未被修改。"
+
+msgid "Seed identity exists but a service is not running. Check Router Roles; displaying a join link does not mean the seed is reachable."
+msgstr "Seed 身份存在，但有服务未运行。请检查路由器角色；显示加入链接不代表 Seed 可达。"
+
+msgid "Use Open Mesh setup to initialize Relay and Directory together. No manual JSON configuration is needed."
+msgstr "请通过 Open Mesh 设置一起初始化 Relay 和 Directory，无需手工编写 JSON 配置。"
+
+msgid "Open Mesh connection"
+msgstr "Open Mesh 连接"
+
+msgid "Mesh client"
+msgstr "Mesh 客户端"
+
+msgid "Join a Mesh before reconnecting. No saved connection was changed."
+msgstr "请先加入 Mesh 再重新连接。未修改任何已保存连接。"
+
+msgid "Disconnected"
+msgstr "已断开"
+
+msgid "Change Mesh"
+msgstr "更换 Mesh"
+
+msgid "Disconnect"
+msgstr "断开连接"
+
+msgid "Reconnect"
+msgstr "重新连接"
+
+msgid "Disconnect Mesh"
+msgstr "断开 Mesh"
+
+msgid "Reconnect Mesh"
+msgstr "重新连接 Mesh"
+
+msgid "Disconnect this router from its Mesh? Calls using this connection will be interrupted. The saved join configuration is kept for reconnecting."
+msgstr "断开此路由器的 Mesh 连接？使用此连接的调用将中断，加入配置会保留，方便重新连接。"
+
+msgid "Reconnect using the saved Mesh connection. No new join link is required."
+msgstr "使用已保存的 Mesh 配置重新连接，无需再次粘贴加入链接。"
+
+msgid "Cloud Relay and this router’s hosted Relay and Directory remain running. LAN discovery and local Agent services are not disabled."
+msgstr "Cloud Relay 及本机托管的 Relay、Directory 继续运行。不会关闭局域网发现或本地 Agent 服务。"
+
+msgid "Join using a Mesh link. Addresses and connection settings are managed automatically. Hosting Relay and Directory services is configured in Router Roles; Cloud Relay remains separate."
+msgstr "通过 Mesh 链接加入，地址和连接参数自动管理。本机 Relay 与 Directory 服务在路由器角色中配置；Cloud Relay 保持独立。"
+
+msgid "Applying a connection change briefly reloads Agent routing. Other routing connections reconnect automatically; their saved settings are unchanged."
+msgstr "应用连接变更会短暂重载 Agent 路由，其他路由连接会自动重连，其保存的配置保持不变。"
+
+msgid "Sharing entries"
+msgstr "分享入口"
+
+msgid "Mesh sharing entries"
+msgstr "Mesh 分享入口"
+
+msgid "Directory domain or IP"
+msgstr "Directory 域名或 IP"
+
+msgid "Directory external port"
+msgstr "Directory 对外端口"
+
+msgid "Relay domain or IP"
+msgstr "Relay 域名或 IP"
+
+msgid "Relay external port"
+msgstr "Relay 对外端口"
+
+msgid "Access path"
+msgstr "访问路径"
+
+msgid "Remove path"
+msgstr "移除路径"
+
+msgid "Add access path"
+msgstr "添加访问路径"
+
+msgid "Save sharing entries"
+msgstr "保存分享入口"
+
+msgid "Relay assigned — connecting tunnel"
+msgstr "已分配 Relay，正在连接隧道"
+
+msgid "Relay tunnel connected"
+msgstr "Relay 隧道已连接"
+
+msgid "Use up to four distinct access paths with valid domain names or IP addresses and service ports."
+msgstr "最多添加四组不同的访问路径，填写有效域名或 IP 及对应服务端口。"
+
+msgid "These are addresses reachable by joining routers, not LuCI addresses. Empty uses the current LAN entry. Add public domain/IP and mapped ports only when needed; this does not create upstream NAT forwarding."
+msgstr "这里填写加入方能访问的服务入口，不是 LuCI 地址。留空使用当前局域网入口；需要时再添加公网域名/IP 和映射端口。本操作不会创建上级 NAT 转发。"
+
+msgid "All paths must reach this same seed. TLS must pass through to its Relay and Directory. Changing entries preserves keys and services; existing members need the updated join link."
+msgstr "所有路径必须指向同一 Seed，TLS 需透传至其 Relay 和 Directory。修改入口不会更换密钥或重启服务；已加入的成员需重新导入更新后的链接。"
+
+msgid "Install or upgrade the Directory package to edit Relay targets."
+msgstr "请安装或升级 Directory 软件包后编辑 Relay 目标。"
+
+msgid "Initialize the Directory first, then reload. Its configuration could not be read."
+msgstr "无法读取 Directory 配置。请先初始化服务，再重新加载。"
+
+msgid "This configuration path is not supported by the editor. Use a regular JSON file directly inside /etc/nexus-directoryd/."
+msgstr "编辑器不支持此配置路径。请使用 /etc/nexus-directoryd/ 下的普通 JSON 文件。"
+
+msgid "The Directory configuration is incomplete or invalid. Initialize or repair the service first. Nothing was changed."
+msgstr "Directory 配置不完整或无效。请先初始化或修复服务；未修改任何配置。"
+
+msgid "Configuration changed. Close and reload before reviewing your changes again."
+msgstr "配置已变化。请关闭并重新加载，再次检查修改。"
+
+msgid "Another configuration change is in progress. Try again shortly."
+msgstr "正在应用其他配置修改，请稍后重试。"
+
+msgid "Check Relay ID, Router ID, domain and connection IPv4. Use lowercase identifiers without spaces."
+msgstr "请检查 Relay ID、Router ID、域和连接 IPv4。标识使用小写字符，不含空格。"
+
+msgid "Use an HTTPS address with a certificate hostname, explicit port (1–65535), and /arpx/v1 path."
+msgstr "请输入 HTTPS 地址，包含证书主机名、明确的端口（1–65535）及 /arpx/v1 路径。"
+
+msgid "Relay IDs must be unique."
+msgstr "Relay ID 不能重复。"
+
+msgid "Keep between 1 and 32 Relay targets."
+msgstr "Relay 目标数量须为 1 至 32。"
+
+msgid "Select between 1 and 4 Relays for Open Mesh assignment."
+msgstr "请选择 1 至 4 个 Relay 用于 Open Mesh 分配。"
+
+msgid "This Relay is still referenced by a configured identity. Keep it until that assignment is removed."
+msgstr "此 Relay 仍被已配置的身份引用。请先移除相关分配，再删除此 Relay。"
+
+msgid "Open Mesh assignment is not enabled for this Directory."
+msgstr "此 Directory 未启用 Open Mesh 分配。"
+
+msgid "The default Seed Relay is protected by existing pinned join links. Use Sharing entries for its access addresses; it cannot be replaced here."
+msgstr "已有固定信任的加入链接保护默认 Seed Relay。请通过“分享入口”修改访问地址，不能在此替换。"
+
+msgid "Directory verification failed. The previous configuration was restored; review the targets and retry."
+msgstr "Directory 验证失败，已恢复之前的配置。请检查目标后重试。"
+
+msgid "The previous configuration was restored, but Directory recovery failed. Check Role status before retrying."
+msgstr "已恢复之前的配置，但 Directory 服务恢复失败。请检查角色状态后重试。"
+
+msgid "Another program changed the file during verification. It was not overwritten; the protected backup was kept. Reload and check Directory diagnostics."
+msgstr "验证期间其他程序修改了文件。未覆盖该修改，并保留了受保护的备份。请重新加载并检查 Directory 诊断。"
+
+msgid "The Directory request failed. Reload its status before trying again."
+msgstr "Directory 请求失败。请重新加载状态后再试。"
+
+msgid "Relay ID"
+msgstr "Relay ID"
+
+msgid "Relay Router ID"
+msgstr "Relay 的 Router ID"
+
+msgid "Relay domain"
+msgstr "Relay 域"
+
+msgid "Relay HTTPS endpoint"
+msgstr "Relay HTTPS 地址"
+
+msgid "Connection IPv4"
+msgstr "连接 IPv4"
+
+msgid "Enter the values from the target Relay. Its TLS identity and ticket key must already match this Directory; adding an address does not provision a remote Relay or verify Internet reachability. Nexus Cloud Relay is not changed."
+msgstr "请填写目标 Relay 的实际配置。其 TLS 身份和票据密钥须已与此 Directory 匹配；添加地址不会配置远端 Relay，也不代表已验证公网可达性。Nexus Cloud Relay 不受影响。"
+
+msgid "Existing v2 join links pin this Seed Relay. Its default assignment is protected. Additional targets can be catalogued, but are not automatically assigned to those clients. Use Sharing entries to change Seed access paths."
+msgstr "现有 v2 加入链接固定信任此 Seed Relay，默认分配受到保护。可以添加其他目录目标，但不会自动分配给这些客户端。请通过“分享入口”修改 Seed 访问路径。"
+
+msgid "New Relay"
+msgstr "新 Relay"
+
+msgid "Assign to Open Mesh nodes"
+msgstr "分配给 Open Mesh 节点"
+
+msgid "Referenced by configured identities; removal is blocked."
+msgstr "已有身份引用此 Relay，不能直接移除。"
+
+msgid "Remove Relay"
+msgstr "移除 Relay"
+
+msgid "Saving changes only the Relay catalog and Open Mesh selection. An enabled Directory is restarted and verified; failures restore the previous file. Existing Relay tunnels are not stopped."
+msgstr "保存仅修改 Relay 目录和 Open Mesh 分配选择。已启用的 Directory 会重启并验证，失败时恢复之前的文件；不会停止现有 Relay 隧道。"
+
+msgid "Add Relay"
+msgstr "添加 Relay"
+
+msgid "Close and reload"
+msgstr "关闭并重新加载"
+
+msgid "Save Relay targets"
+msgstr "保存 Relay 目标"
+
+msgid "Relay targets saved. Directory remains stopped until enabled in Router Roles."
+msgstr "Relay 目标已保存。Directory 仍保持停止状态，可在路由器角色中启用。"
+
+msgid "Directory Relay targets saved and verified."
+msgstr "Directory Relay 目标已保存并通过验证。"
+
+msgid "No Relay target changes to apply."
+msgstr "Relay 目标没有待应用的修改。"
+
+msgid "The response was interrupted. Close and reload to check the saved configuration before retrying."
+msgstr "响应中断。请关闭并重新加载，确认已保存的配置后再试。"
+
+msgid "Directory Relay targets"
+msgstr "Directory 可分配的 Relay"
+
+msgid "Manage Relays this Directory can assign. No JSON editing is required."
+msgstr "管理此 Directory 可分配的 Relay，无需编辑 JSON。"
+
+msgid "Open Mesh assignment"
+msgstr "Open Mesh 分配"
+
+msgid "Identity assignment"
+msgstr "身份分配"
+
+msgid "Not assigned"
+msgstr "未分配"
+
+msgid "Loading Relay targets…"
+msgstr "正在加载 Relay 目标…"
+
+msgid "Edit Relay targets"
+msgstr "编辑 Relay 目标"
+
+msgid "Could not refresh Directory targets. The existing configuration was not changed."
+msgstr "无法刷新 Directory 目标。未修改现有配置。"

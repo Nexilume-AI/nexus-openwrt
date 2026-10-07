@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <uhttpd/uhttpd.h>
@@ -99,6 +100,9 @@ struct adapterd_request {
     bool backend_started;
     bool stream_head_sent;
     bool stream_head_parsed;
+    bool mcp_envelope_stream;
+    size_t stream_output_bytes;
+    struct adapter_mcp_stream_state mcp_stream;
     int backend_fd;
     struct agent_adapter_ingress_route route;
     struct adapter_normalized_request normalized;
@@ -488,7 +492,15 @@ static void reject_head(
     const char *code
 )
 {
-    connection->send_error(connection, status, "%s", code);
+    if (status == 413 && strcmp(code, "REQUEST_TOO_LARGE") == 0) {
+        char message[192];
+        snprintf(message, sizeof(message),
+                 "MCP/A2A request must be non-empty and at most %u bytes; "
+                 "reduce inline data or use a file reference.", config.max_request_bytes);
+        send_plain_error(connection, status, code, message);
+    } else {
+        connection->send_error(connection, status, "%s", code);
+    }
     release_request(connection);
     connection->userdata = CONNECTION_REJECTED;
 }
@@ -673,21 +685,47 @@ static bool emit_stream_event(
 )
 {
     struct adapterd_request *state = context;
+    struct json_object *message = NULL;
+    char *mapped = NULL;
+    bool sent = false;
+
+    if (state->route.protocol == AGENT_ADAPTER_PROTOCOL_MCP &&
+        !state->mcp_envelope_stream) {
+        const char *json;
+        size_t length;
+        if (!adapter_codec_mcp_event(&state->normalized, &state->mcp_stream,
+                                     event, event_length, &message)) return false;
+        if (message == NULL) return true;
+        json = json_object_to_json_string_ext(message, JSON_C_TO_STRING_PLAIN);
+        length = strlen(json);
+        mapped = malloc(length + sizeof("event: message\ndata: \n\n"));
+        if (mapped == NULL) { json_object_put(message); return false; }
+        event_length = (size_t)sprintf(mapped, "event: message\ndata: %s\n\n", json);
+        event = mapped;
+    }
 
     if (state->connection->closed(state->connection) ||
-        state->stream_relay.emitted_bytes > config.max_response_bytes ||
+        state->stream_output_bytes > config.max_response_bytes ||
         event_length > config.max_response_bytes -
-            (size_t)state->stream_relay.emitted_bytes) {
-        return false;
-    }
+            state->stream_output_bytes) goto done;
     state->connection->send(state->connection, event, event_length);
+    state->stream_output_bytes += event_length;
     runtime.stream_events++;
     runtime.stream_bytes += event_length;
-    return true;
+    sent = true;
+done:
+    json_object_put(message);
+    free(mapped);
+    return sent;
 }
 
 static void complete_stream(struct adapterd_request *state)
 {
+    if (state->route.protocol == AGENT_ADAPTER_PROTOCOL_MCP &&
+        !state->mcp_envelope_stream && !state->mcp_stream.finished) {
+        fail_stream(state);
+        return;
+    }
     (void)agent_invoke_backend_machine_transition(
         &state->backend_machine, AGENT_BACKEND_RESPONSE_RECEIVED);
     runtime.completed_requests++;
@@ -1117,6 +1155,28 @@ static void ingress_handler(struct uh_connection *connection, int event)
             reject_head(connection, 404, "ADAPTER_ROUTE_NOT_FOUND");
             return;
         }
+        /* GET/DELETE are unsupported, including standard MCP resumption.
+         * Check this before POST-only Accept/body validation. */
+        if (strcmp(connection->get_method_str(connection), "POST") != 0) {
+            reject_head(connection, 405, "METHOD_NOT_ALLOWED");
+            return;
+        }
+        if (state->route.protocol == AGENT_ADAPTER_PROTOCOL_MCP) {
+            struct uh_str format = connection->get_header(
+                connection, "X-Nexus-Stream-Format");
+            if (format.p != NULL) {
+                if (format.len != 8U || memcmp(format.p, "envelope", 8U) != 0) {
+                    reject_head(connection, 400, "INVALID_STREAM_FORMAT");
+                    return;
+                }
+                state->mcp_envelope_stream = true;
+            }
+            if (!state->mcp_envelope_stream &&
+                connection->get_header(connection, "Last-Event-ID").p != NULL) {
+                reject_head(connection, 400, "MCP_RESUME_UNSUPPORTED");
+                return;
+            }
+        }
         if (state->route.protocol == AGENT_ADAPTER_PROTOCOL_MCP &&
             header_contains(connection, "Accept", "text/event-stream")) {
             if (!header_contains(connection, "Accept", "application/json")) {
@@ -1308,6 +1368,32 @@ static void ingress_handler(struct uh_connection *connection, int event)
         }
         state->effective_gateway_timeout_ms = state->normalized.interactive
             ? config.interactive_timeout_ms : config.gateway_timeout_ms;
+        if (state->route.protocol == AGENT_ADAPTER_PROTOCOL_MCP &&
+            !state->mcp_envelope_stream) {
+            unsigned char nonce[16];
+            size_t count = 0U, index;
+            static const char hex[] = "0123456789abcdef";
+            /* Stateless MCP: an RPC ID is response correlation, not a global
+             * idempotency key. Each POST receives a fresh internal task ID.
+             * Explicit Nexus envelope mode retains its own replay contract. */
+            while (count < sizeof(nonce)) {
+                ssize_t got = getrandom(nonce + count, sizeof(nonce) - count, 0);
+                if (got < 0 && errno == EINTR) continue;
+                if (got <= 0) {
+                    fail_gateway(state, 500, "TASK_ID_UNAVAILABLE");
+                    return;
+                }
+                count += (size_t)got;
+            }
+            memcpy(state->normalized.task_id, "mcp:", 4U);
+            for (index = 0U; index < sizeof(nonce); index++) {
+                state->normalized.task_id[4U + 2U * index] = hex[nonce[index] >> 4U];
+                state->normalized.task_id[5U + 2U * index] = hex[nonce[index] & 15U];
+            }
+            state->normalized.task_id[36U] = '\0';
+            json_object_object_add(state->normalized.envelope, "task_id",
+                json_object_new_string(state->normalized.task_id));
+        }
         if (state->route.streaming &&
             !attach_resume_cursor(connection, state->normalized.envelope)) {
             send_plain_error(connection, 400, "INVALID_LAST_EVENT_ID",

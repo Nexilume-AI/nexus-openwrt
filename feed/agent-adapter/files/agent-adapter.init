@@ -5,6 +5,7 @@ START=97
 STOP=8
 
 start_service() {
+	[ "$(uci -q get agent_gateway.main.services_enabled)" != 0 ] || return 0
 	local enabled listen gateway max_request max_response timeout max_inflight
 	local tenant source_agent hop_limit region jail runtime_dir runtime_config
 	local stream_enabled stream_idle_timeout max_stream_event interactive_timeout
@@ -15,6 +16,7 @@ start_service() {
 	if [ "$enabled" -ne 1 ]; then
 		config_load agent_gateway
 		config_get_bool lan_sdk_enabled main lan_sdk_enabled 0
+		config_load agent
 		config_get_bool public_ingress_enabled main public_ipv6_enabled 0
 		config_load nexus_cloud
 		config_get_bool cloud_enabled main enabled 0

@@ -39,7 +39,7 @@ def main() -> int:
         "relay", "open_mesh_relay",
     }
     require(read_methods == allowed_read, "read ACL differs from the bounded status API")
-    require(acl["luci-app-agent-router"]["read"]["ubus"].get("nexus-agent-ui") == ["overview"],
+    require(acl["luci-app-agent-router"]["read"]["ubus"].get("nexus-agent-ui") == ["overview", "mesh_status"],
             "read-only users must only access the sanitized user overview")
 
     trust_acl = acl["luci-app-agent-router-trust"]
@@ -58,7 +58,7 @@ def main() -> int:
         "discovery_revoke", "card_revoke",
     }
     require(write_methods == allowed_write, "write ACL contains an unapproved agent mutation")
-    require(write["ubus"].get("nexus-agent-ui") == ["set_feature", "pair_cloud", "refresh"],
+    require(write["ubus"].get("nexus-agent-ui") == ["set_feature", "pair_cloud", "refresh", "setup_mesh", "share_mesh", "set_directory_relays"],
             "configure ACL must expose only the bounded user-mode mutations")
     require(set(write["uci"]) == {
         "agent", "agent_peers", "agent_policy", "nexus_roles",
@@ -67,7 +67,7 @@ def main() -> int:
 
     js_files = sorted(resources.rglob("*.js"))
     css_files = sorted(resources.rglob("*.css"))
-    require(len(js_files) == 14, "unexpected JavaScript file count")
+    require(len(js_files) == 17, "unexpected JavaScript file count")
     source = "\n".join(path.read_text(encoding="utf-8") for path in js_files)
     identity_source = "\n".join(
         (resources / "view" / "agent-router" / name).read_text(encoding="utf-8")
@@ -82,7 +82,9 @@ def main() -> int:
         require(forbidden not in source, f"forbidden frontend primitive or payload field: {forbidden}")
     require(not re.search(r"https?://", styles), "stylesheet must not fetch external resources")
     require("const LIST_LIMIT = 200;" in source, "runtime list pages must use a 200-row ceiling")
-    require(source.count("params: [ 'limit' ]") == 9, "every list RPC must pass an explicit limit")
+    require(source.count("params: [ 'limit' ]") == 7, "every remaining list RPC must pass an explicit limit")
+    require("callCrossDiscoveries" not in source and "s.tab('cross'" not in source,
+            "experimental DNS discovery controls and polling must not be exposed")
     require(".prompt" not in source.lower() and "'prompt'" not in source.lower(),
             "UI must not bind a prompt field")
     require("tool arguments" in source.lower(), "overview must state its metadata-only boundary")
@@ -102,32 +104,29 @@ def main() -> int:
     settings_source = (resources / "view" / "agent-router" / "settings.js").read_text(encoding="utf-8")
     home_source = (resources / "view" / "agent-router" / "home.js").read_text(encoding="utf-8")
     mode_source = (resources / "agent-router" / "mode.js").read_text(encoding="utf-8")
-    require("Open Mesh Directory URLs" in setup_source and
-            "open_mesh_directory_connect_ipv4s" not in setup_source and
-            "Nexus Cloud Relay is configured separately" in setup_source,
-            "Quick Setup must expose only the self-hosted Open Mesh seed")
-    require("Optional fixed Directory IPv4 addresses" in settings_source and
-            "Leave empty for DNS" in settings_source and
-            "exactly one IPv4 address" in settings_source,
-            "Advanced Settings must retain the explicit positional pin override")
-    require("admin/status/agent-router/diagnostics" not in menu and
+    for mesh_view in (setup_source, settings_source):
+        require("meshSetup.render({ clientOnly: true })" in mesh_view and
+                "open_mesh_directory_connect_ipv4s" not in mesh_view and
+                "open_mesh_directory_endpoints" not in mesh_view,
+                "Quick and Advanced Setup must share guided Mesh controls, not manual URLs")
+    require("admin/network/agent-router/diagnostics" not in menu and
             not (views / "agent-router" / "diagnostics.js").exists(),
             "Route Explain & Diagnostics must not be exposed in the user UI")
     require("Could not read capability routes" in source and "status is unavailable" in source,
             "RPC failures must not masquerade as empty routing state")
-    require(menu["admin/status/agent-router/home"]["order"] == 5 and
-            menu["admin/status/agent-router/home"]["action"]["path"] == "agent-router/home",
+    require(menu["admin/network/agent-router/home"]["order"] == 5 and
+            menu["admin/network/agent-router/home"]["action"]["path"] == "agent-router/home",
             "user mode must be the default Agent Routing child")
-    require("admin/status/agent-router/developer" in menu and
-            menu["admin/status/agent-router/developer"]["action"]["type"] == "firstchild",
+    require("admin/network/agent-router/developer" in menu and
+            menu["admin/network/agent-router/developer"]["action"]["type"] == "firstchild",
             "developer views must remain under one explicit mode")
     legacy_aliases = [
         entry for path, entry in menu.items()
-        if path.startswith("admin/status/agent-router/") and
+        if path.startswith("admin/network/agent-router/") and
         path.count("/") == 3 and entry.get("action", {}).get("type") == "alias"
     ]
     require(len(legacy_aliases) == 12 and all(entry.get("hidden") is True and
-            entry.get("action", {}).get("path") == "admin/status/agent-router/home"
+            entry.get("action", {}).get("path") == "admin/network/agent-router/home"
             for entry in legacy_aliases),
             "all twelve legacy developer URLs must return to User mode")
     require("User mode" in mode_source and "Developer mode" in mode_source and
@@ -142,10 +141,11 @@ def main() -> int:
     ]
     require(all("mode.render('developer')" in item for item in developer_sources),
             "every developer page must provide a direct User mode switch")
+    pairing_source = (resources / "agent-router" / "cloud-pairing.js").read_text(encoding="utf-8")
     require("object: 'nexus-agent-ui'" in home_source and
             "method: 'overview'" in home_source and
             "method: 'set_feature'" in home_source and
-            "method: 'pair_cloud'" in home_source,
+            "method: 'pair_cloud'" in pairing_source and "pairing.open" in home_source,
             "user mode must use the bounded RPC facade")
     for forbidden in ("AFIB", "ARPX", "Policy RIB", "route_id", "endpoint", "tenant", "public_ingress_port"):
         require(forbidden not in home_source, f"user mode exposes a developer-only field: {forbidden}")
@@ -157,7 +157,7 @@ def main() -> int:
     require("+luci-base +agentd" in makefile, "LuCI package must depend on the native agentd daemon")
     require("LUCI_PKGARCH:=all" in makefile, "LuCI package must be architecture independent")
     require("PKG_VERSION:=3.1.0" in makefile, "focused Router UI package version must be release locked")
-    require("PKG_RELEASE:=22" in makefile, "desktop-compatible dual-mode LuCI release must be locked")
+    require("PKG_RELEASE:=36" in makefile, "Network menu LuCI release must be locked")
     require("+agent-netd" in makefile,
             "public IPv6 UI must install the restricted network executor")
     require("+agent-gw +agent-adapter" in makefile,
@@ -171,7 +171,7 @@ def main() -> int:
     require("logger" not in rpcd_source and "sed '/pairing_code/d'" in rpcd_source,
             "pairing codes must not enter logs or configuration generations")
     require("router_mesh_mode" not in rpcd_source and "lan_auto_promotion_mode" not in rpcd_source and
-            "peer_listen_port" not in rpcd_source and "lan_sdk_listen" not in rpcd_source,
+            "peer_listen_port" not in rpcd_source and 'uci set "agent_gateway.main.lan_sdk_listen=' not in rpcd_source,
             "product switches must preserve developer policy, address and port settings")
     require("CONFIGURATION_CHANGED" in rpcd_source and "APPLY_FAILED" in rpcd_source and
             "restore_option" in rpcd_source,
@@ -196,7 +196,7 @@ def main() -> int:
             "public_ingress_port" in settings_source and
             "Agent call authentication" in settings_source and
             "Plain HTTP (no TLS)" in settings_source and
-            "No JWT" in settings_source and
+            "form.DummyValue, '_authentication_policy'" in settings_source and
             "public_transport" in settings_source,
             "P8.12.2 must expose the complete public /128 ingress prerequisites")
     require("Publish a direct connection descriptor" in settings_source and
@@ -237,9 +237,8 @@ def main() -> int:
             "mode.render('developer')" in roles_source and
             "const mode = savedMode();" not in roles_source,
             "Router Roles must not shadow the shared mode renderer")
-    require("Connect this router to an Open Mesh Relay" in roles_source and
-            "Configure a custom seed" in roles_source,
-            "Router Roles must distinguish hosted roles from Relay client setup")
+    require("meshSetup.render()" in roles_source,
+            "Router Roles must use the product Mesh create/join workflow")
     require("nexus-agent-relayd" in roles_source and "nexus-agent-directoryd" in roles_source,
             "Router Roles must name the optional server packages")
     require("object: 'service'" in roles_source and "method: 'list'" in roles_source,
@@ -254,21 +253,23 @@ def main() -> int:
             "Router Roles must distinguish an uninstalled service from a stopped service")
     require("form.Flag, 'enabled'" not in roles_source,
             "Router Roles must not expose independent low-context service switches")
-    require("public_hostname" in roles_source and "public_port" in roles_source and
-            "Directory address for other routers" in roles_source and
-            "/v1/open-mesh/assignment" in roles_source and "fs.read" in roles_source,
-            "Router Roles must derive a copyable Directory URL from confirmed public identity and detected listener metadata")
+    require("public_hostname" not in roles_source and "public_port" not in roles_source,
+            "Router Roles must not offer display-only identity settings")
     cloud_source = (resources / "view" / "agent-router" / "cloud.js").read_text(encoding="utf-8")
-    require("One-time pairing code" in cloud_source and
+    require("pairing.open" in cloud_source and
             "Nexus Cloud connection" in cloud_source and
-            "Device certificate" in cloud_source and
+            "Device identity" in cloud_source and
             "Cloud lease duration" in cloud_source,
             "Cloud UI must guide enrollment, mTLS identity and renewable leases")
-    require("Managed by Nexus Cloud (recommended)" in cloud_source and
+    require("Managed by Nexus Cloud" in cloud_source and
             "Check Device TLS" in cloud_source and
             "callTlsCheck" in cloud_source,
             "Cloud UI must default to managed identity and expose one-click TLS verification")
-    require("explicitly replaces the existing Cloud registration" in cloud_source and
+    require("Advanced / manual identity" not in cloud_source and
+            "form.ListValue, 'identity_mode'" not in cloud_source and
+            "form.DummyValue, '_identity_management'" in cloud_source,
+            "Cloud identity must be a read-only summary, not a manual configuration form")
+    require("replaces this Router’s existing Cloud enrollment" in pairing_source and
             "Cloud Relay unavailable" in cloud_source and
             "relayAvailable === false" in cloud_source and
             "value === 'relay' && relayAvailable === false" not in cloud_source and
@@ -279,6 +280,14 @@ def main() -> int:
             "Cloud UI must explain stale Relay availability without blocking a fresh authenticated check")
     require("device_token" not in cloud_source and "Authorization" not in cloud_source,
             "Cloud UI must never read or display the device credential")
+    require("form.DummyValue, '_cloud_origin'" in cloud_source and
+            "form.Value, 'base_url'" not in cloud_source and
+            "form.Value, 'enrollment_url'" not in cloud_source and
+            "form.Value, 'pairing_code'" not in cloud_source,
+            "both modes must use pairing links, never editable Cloud addresses or bare codes")
+    require("localStorage" not in pairing_source and "sessionStorage" not in pairing_source and
+            "uci.set" not in pairing_source and "window.location.reload()" in cloud_source,
+            "pairing links must stay in memory and developer forms must reload managed values")
     protocols_source = (resources / "view" / "agent-router" / "protocols.js").read_text(encoding="utf-8")
     require("Agent APIs & Protocols" in protocols_source and
             "Allow Python SDK registration" in protocols_source and
@@ -308,37 +317,33 @@ def main() -> int:
     require("A2A caller URL" in protocols_source and
             "/message:stream for stream()" in protocols_source,
             "friendly A2A UI must expose the derived protocol endpoint")
-    require("Authentication & task credentials" in protocols_source and
-            "Agent call authentication" in protocols_source and
-            "Remote JWKS - recommended" in protocols_source and
-            "Local public key - advanced" in protocols_source and
-            "jwt_jwks_url" in protocols_source and
-            "transaction_replay_capacity" in protocols_source,
-            "JWT UI must expose mode-first gateway JWT/transaction-token policy")
-    require("Enable No JWT LAN access" in protocols_source and
-            "no_jwt_lan_enabled" in protocols_source and
-            "no_jwt_lan_listen" in protocols_source and
-            "cross-NAT routes" in protocols_source,
-            "P8.21 UI must expose one No JWT mode for LAN and Relay entry")
-    require("Enable JWT-protected LAN SDK access" in protocols_source and
+    require("Authentication & trust" in protocols_source and
+            "Managed by Nexus Cloud" in protocols_source and
+            "cloudManagedAuthentication" in protocols_source and
+            "Cloud authentication needs synchronization" in protocols_source,
+            "authentication must be a truthful managed read-only summary")
+    require("form.ListValue, '_jwt_auth_mode'" not in protocols_source and
+            "form.Value, '_jwt_issuer'" not in protocols_source and
+            "form.ListValue, 'auth_mode'" not in settings_source,
+            "ordinary LuCI saves must not replace managed authentication")
+    require("Automatic LAN authentication" in protocols_source and
             "lan_sdk_enabled" in protocols_source and
             "lan_sdk_listen" in protocols_source and
-            "preserves Authorization" in protocols_source,
-            "JWT mode must retain a controlled LAN SDK registration listener")
+            "requireLanAccess" in protocols_source,
+            "LAN examples must use automatic bootstrap and require an enabled listener")
     require("input_schema_json" in protocols_source and
             "Tool input schema (JSON)" in protocols_source and
             "Tool title" in protocols_source,
             "MCP mappings must expose optional discovery metadata")
-    require("Check saved configuration" in protocols_source and
-            "callService('agent-gw')" in protocols_source and
+    require("callService('agent-gw')" in protocols_source and
             "callService('agent-jwks')" in protocols_source and
-            "All required saved values are present" in protocols_source,
-            "JWT UI must validate saved values and report service readiness")
-    require("gatewayDefaultValue" in protocols_source and
-            "nexus-agent-router" in protocols_source and
-            "/etc/agent-gw/jwks.json" in protocols_source and
-            "/etc/ssl/certs/ca-certificates.crt" in protocols_source,
-            "JWT UI must provide safe defaults instead of requiring expert paths")
+            "callOverview()" in protocols_source and
+            "Status unavailable" in protocols_source,
+            "authentication summary must report actual configuration and unavailable RPC")
+    require("form.DummyValue, '_python_agent_ca_policy'" in protocols_source and
+            "separate from Cloud identity" in protocols_source and
+            "form.Value, '_remote_backend_ca_file'" not in protocols_source,
+            "independent backend trust must be preserved, not mistaken for Cloud trust")
     require("NEXUS_AGENT_TOKEN" in protocols_source and
             "NEXUS_AGENT_TRANSACTION_TOKEN" in protocols_source and
             "LuCI never stores or displays the token" in protocols_source,

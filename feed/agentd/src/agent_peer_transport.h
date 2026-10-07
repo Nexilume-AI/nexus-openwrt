@@ -166,4 +166,8 @@ bool agent_peer_transport_tunnel_send(
     const struct agent_relay_tunnel_message *message
 );
 
+bool agent_peer_transport_tunnel_send_credit(
+    struct agent_peer_transport_manager *manager, const char *peer_id,
+    uint32_t stream_id, uint32_t *credit);
+
 #endif

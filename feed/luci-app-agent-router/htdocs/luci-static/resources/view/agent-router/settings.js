@@ -5,9 +5,9 @@
 'require rpc';
 'require ui';
 'require agent-router.mode as mode';
+'require agent-router.mesh-setup as meshSetup';
 
 const callNetworkDump = rpc.declare({ object: 'network.interface', method: 'dump', expect: { interface: [] } });
-const callAgentStats = rpc.declare({ object: 'agent', method: 'stats', expect: {} });
 
 function configuredOr(option, config, fallback) {
 	option.cfgvalue = function(sectionId) {
@@ -119,8 +119,7 @@ return view.extend({
 			uci.load('agent'),
 			uci.load('agent_gateway'),
 			uci.load('agent_adapter'),
-			callNetworkDump().catch(() => ({ interface: [] })),
-			callAgentStats().catch(() => ({}))
+			callNetworkDump().catch(() => ({ interface: [] }))
 		]);
 	},
 
@@ -128,14 +127,6 @@ return view.extend({
 		let m, s, o, gatewayMap, gatewaySection, adapterMap, adapterSection;
 		const detectedIpv6 = detectPublicIpv6(data[3]);
 		const detectedOnlinkIpv6 = detectUpstreamOnlinkIpv6(data[3]);
-		const agentStats = data[4] || {};
-		const resolverAddress = String(agentStats.cross_discovery_resolver_ipv4 || '127.0.0.1');
-		const resolverPort = Number(agentStats.cross_discovery_resolver_port || 0);
-		const resolverEndpoint = resolverPort > 0 ? resolverAddress + ':' + resolverPort : '';
-		const resolverAutomatic = (uci.get('agent', 'main', 'cross_discovery_resolver_mode') || 'auto') !== 'manual';
-		const resolverDetected = agentStats.cross_discovery_resolver_detected === true ||
-			agentStats.cross_discovery_resolver_detected === 1;
-		const resolverReady = !resolverAutomatic || resolverDetected;
 		m = new form.Map('agent', _('Advanced Agent Router Settings'),
 			_('Expert control-plane, discovery, Relay and static-route settings. Use Quick Setup for common deployments. Save & Apply triggers the native procd reload path; invalid candidate configuration is rejected atomically by agentd.'));
 
@@ -144,8 +135,7 @@ return view.extend({
 		s.tab('identity', _('Identity & capacity'));
 		s.tab('arpx', _('ARPX transport'));
 		s.tab('discovery', _('LAN discovery'));
-		s.tab('cross', _('Cross-domain discovery'));
-		s.tab('relay', _('Open Mesh Relay'));
+		s.tab('relay', _('Open Mesh connection'));
 		s.tab('public_ipv6', _('Public Agent IPv6'));
 
 		o = s.taboption('identity', form.Flag, 'enabled', _('Enable agentd'));
@@ -154,7 +144,7 @@ return view.extend({
 		o.value('open', _('Open distributed mesh (zero configuration)'));
 		o.value('off', _('Managed peer trust'));
 		o.rmempty = false;
-		o.description = _('Open Mesh automatically admits LAN, static-seed and DNSSEC/SVCB Routers, exchanges Agent routes across domains, and keeps Cloud Relay trust isolated.');
+		o.description = _('Open Mesh automatically connects validated LAN and seed Routers and exchanges Agent routes. Use Open Mesh Directory and Relay for cross-NAT connectivity. Cloud Relay trust stays separate.');
 		o = routerIdentifier(s.taboption('identity', form.Value, 'router_id', _('Router ID')));
 		o.rmempty = false;
 		o = s.taboption('identity', form.Value, 'domain_id', _('Agent domain'));
@@ -193,67 +183,10 @@ return view.extend({
 		o = s.taboption('discovery', form.Value, 'lan_auto_promotion_grace_seconds', _('Graceful restart (seconds)'));
 		o.datatype = 'range(5,300)'; o.rmempty = false;
 
-		o = s.taboption('cross', form.Flag, 'cross_discovery_enabled', _('Enable DNS SVCB discovery'));
-		o.rmempty = false;
-		o = s.taboption('cross', form.Value, 'cross_discovery_domain', _('Remote domain'));
-		o.datatype = 'hostname';
-		o.description = _('The remote Nexus Router administrative DNS domain. The router queries _agents.<domain>, not an individual Agent ID or URL.');
-		o = s.taboption('cross', form.DummyValue, '_detected_cross_resolver', _('Local DNSSEC resolver'));
-		o.cfgvalue = function() {
-			if (!resolverEndpoint) return _('Available after agentd starts');
-			return resolverReady ? resolverEndpoint : _('No local resolver detected');
-		};
-		o.description = resolverEndpoint && resolverReady ?
-			(resolverAutomatic ?
-				_('Selected automatically by the native service. DNS responses are still accepted only when the local validator sets the authenticated-data flag.') :
-				_('Using the manual local endpoint below. DNS responses are still accepted only when the resolver sets the authenticated-data flag.')) :
-			_('No effective resolver is currently reported. Start agentd after installing or enabling a local DNSSEC-validating resolver.');
-		o = configuredOr(s.taboption('cross', form.ListValue, 'cross_discovery_resolver_mode', _('Resolver configuration')), 'agent', 'auto');
-		o.value('auto', _('Automatic (recommended)'));
-		o.value('manual', _('Manual override'));
-		o.rmempty = false;
-		o.description = _('Automatic mode detects a listening local Unbound validator, then a DNSSEC-enabled dnsmasq. Manual values are intended only for non-standard local resolver ports.');
-		o = s.taboption('cross', form.Value, 'cross_discovery_resolver_ipv4', _('DNSSEC resolver IPv4'));
-		o.datatype = 'ip4addr'; o.rmempty = false;
-		o.depends('cross_discovery_resolver_mode', 'manual');
-		o.description = _('Advanced override. Only a numeric 127.0.0.0/8 loopback address is accepted. This is not the remote router address.');
-		o = s.taboption('cross', form.Value, 'cross_discovery_resolver_port', _('Resolver port'));
-		o.datatype = 'port'; o.rmempty = false;
-		o.depends('cross_discovery_resolver_mode', 'manual');
-		o.description = _('Advanced override for the local DNSSEC validator listening port.');
-		o = s.taboption('cross', form.ListValue, 'card_authorization_mode', _('Agent Card authorization'));
-		o.value('off', _('Off')); o.value('same-domain', _('Same domain')); o.value('allowlist', _('Allowlist')); o.value('all-signed', _('All signed')); o.value('directory-trusted', _('Directory trusted'));
-		o.rmempty = false;
-		o = commaList(s.taboption('cross', form.DynamicList, 'card_authorization_allowlist', _('Agent Card router allowlist')), 'agent');
-		o.placeholder = 'router-partner-01';
-		o.description = _('One Router ID per entry.');
-		o.depends('card_authorization_mode', 'allowlist');
-
-		o = s.taboption('relay', form.DummyValue, '_open_mesh_relay_status', _('Open Mesh Relay status'));
-		o.cfgvalue = function() {
-			if (agentStats.open_mesh_relay_assignment_active) return _('Connected');
-			if (agentStats.open_mesh_relay_bootstrap_enabled) return _('Connecting');
-			return _('Disabled');
-		};
-		o.description = _('Cloud Relay status remains on the Cloud page.');
-		o = s.taboption('relay', form.Flag, 'open_mesh_relay_enabled', _('Enable self-hosted Open Mesh Relay'));
-		o.rmempty = false;
-		o.description = _('This setting only controls a self-hosted OpenWrt Open Mesh seed. Nexus Cloud Relay is managed independently from the Cloud page.');
-		o = commaList(s.taboption('relay', form.DynamicList, 'open_mesh_directory_endpoints', _('Open Mesh Directory URLs')), 'agent');
-		o.depends('open_mesh_relay_enabled', '1');
-		o.placeholder = 'https://directory-seed.mesh.local:18443/v1/open-mesh/assignment';
-		o.description = _('Self-hosted Open Mesh Directory seeds, maximum four. Cloud-managed Relay endpoints are not shown or modified here.');
-		o = commaList(s.taboption('relay', form.DynamicList, 'open_mesh_directory_connect_ipv4s', _('Optional fixed Directory IPv4 addresses')), 'agent');
-		o.depends('open_mesh_relay_enabled', '1');
-		o.allowduplicates = true;
-		o.placeholder = '203.0.113.20';
-		o.description = _('Advanced override. Leave empty for DNS. If set, provide exactly one IPv4 address for each Directory URL in the same order. TLS still verifies the hostname from the URL.');
-		o = s.taboption('relay', form.Value, 'open_mesh_directory_poll_ms', _('Assignment poll (ms)'));
-		o.depends('open_mesh_relay_enabled', '1');
-		o.datatype = 'range(1000,3600000)'; o.rmempty = false;
-		o = s.taboption('relay', form.Value, 'open_mesh_directory_timeout_ms', _('Directory timeout (ms)'));
-		o.depends('open_mesh_relay_enabled', '1');
-		o.datatype = 'range(100,60000)'; o.rmempty = false;
+		o = s.taboption('relay', form.DummyValue, '_mesh_connection', _('Mesh client'));
+		o.renderWidget = function() { return meshSetup.render({ clientOnly: true }); };
+		// This is not a UCI editor: preserve all saved/legacy transport settings.
+		o.write = o.remove = function() {};
 
 		o = configuredOr(s.taboption('public_ipv6', form.ListValue, 'public_ipv6_mode', _('IPv6 address source')), 'agent', 'auto');
 		o.value('auto', _('Automatic (recommended)'));
@@ -383,24 +316,17 @@ return view.extend({
 		o = gatewaySection.option(form.Flag, 'invoke_enabled', _('Allow Agents to call other Agents'));
 		o.rmempty = false;
 		o.description = _('Required for public HTTP, SSE, MCP and A2A invocation. Registration remains a separate control.');
-		o = gatewaySection.option(form.ListValue, 'auth_mode', _('Agent call authentication'));
-		o.value('none', _('No JWT'));
-		o.value('jwt', _('JWT'));
-		o.default = 'none';
-		o.rmempty = false;
-		o.description = _('No JWT permits calls without a token on this public /128 entry. Configure JWT details under Agent APIs & Protocols when JWT is selected.');
+		o = gatewaySection.option(form.DummyValue, '_authentication_policy', _('Agent call authentication'));
 		o.cfgvalue = function(sectionId) {
-			const value = uci.get('agent_gateway', sectionId, 'auth_mode');
-			if (value === 'none' || value === 'jwt')
-				return value;
-			return uci.get('agent_gateway', sectionId, 'jwt_required') === '1' ? 'jwt' : 'none';
+			const jwt = uci.get('agent_gateway', sectionId, 'auth_mode') === 'jwt';
+			if (jwt && uci.get('agent_gateway', sectionId, 'jwt_jwks_file') === '/etc/agent-gw/nexus-cloud-jwks.json')
+				return _('Cloud-managed configuration');
+			return jwt || uci.get('agent_gateway', sectionId, 'jwt_required') === '1' ?
+				_('Existing standalone authentication') : _('Existing policy: authentication disabled');
 		};
-		o.write = function(sectionId, value) {
-			uci.set('agent_gateway', sectionId, 'auth_mode', value);
-			uci.set('agent_gateway', sectionId, 'jwt_required', value === 'jwt' ? '1' : '0');
-			if (value === 'none')
-				uci.set('agent_gateway', sectionId, 'forwarding_assertion_enabled', '0');
-		};
+		o.write = function() {};
+		o.remove = function() {};
+		o.description = _('Read only. Manage Cloud identity through pairing. Agent APIs & Protocols shows authentication status; saving network settings does not change the trust policy.');
 		o = gatewaySection.option(form.Flag, 'stream_enabled', _('Allow streaming and reconnect'));
 		o.rmempty = false;
 		o.description = _('Enables SSE streaming. A reconnect remains pinned to the same public /128 and Agent route.');

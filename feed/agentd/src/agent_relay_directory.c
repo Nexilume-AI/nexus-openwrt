@@ -528,6 +528,8 @@ bool agent_relay_assignment_equal(
 {
     return left != NULL && right != NULL &&
            left->open_mesh == right->open_mesh &&
+           strcmp(left->mesh_connect_host, right->mesh_connect_host) == 0 &&
+           strcmp(left->mesh_tls_sha256, right->mesh_tls_sha256) == 0 &&
            strcmp(left->assignment_id, right->assignment_id) == 0 &&
            strcmp(left->relay_id, right->relay_id) == 0 &&
            strcmp(left->relay_router_id, right->relay_router_id) == 0 &&

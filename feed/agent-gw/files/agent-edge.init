@@ -33,6 +33,11 @@ start_service() {
 	local max_connections no_jwt_lan_enabled no_jwt_lan_listen
 	local lan_sdk_enabled lan_sdk_listen
 	local lan_bridge_token_file
+	local public_resolution public_ready
+	local public_network
+	# Remove a stale managed rule even if validation below fails. LAN remains
+	# independently available when WAN IPv6 is absent.
+	/usr/libexec/nexus-agent-ingress-firewall clear || return 1
 
 	config_load agent_gateway
 	config_get_bool mtls_enabled main mtls_enabled 0
@@ -48,6 +53,8 @@ start_service() {
 	config_get_bool no_jwt_lan_enabled main no_jwt_lan_enabled 0
 	config_get no_jwt_lan_listen main no_jwt_lan_listen 0.0.0.0:7445
 	config_get_bool lan_sdk_enabled main lan_sdk_enabled 0
+	# Gateway upgrades the LAN-only mode to authenticated Sessions internally.
+	[ "$lan_sdk_enabled" -ne 1 ] || auth_mode=jwt
 	config_get lan_sdk_listen main lan_sdk_listen 0.0.0.0:7446
 	lan_bridge_token_file=/var/run/agent-gw/lan-bridge.token
 	config_get listen main mtls_listen 0.0.0.0:7443
@@ -62,6 +69,9 @@ start_service() {
 		/var/run/agent-gw/public-ingress.token
 	config_get public_port main public_ingress_port 7443
 	config_get max_connections main public_ingress_max_connections 32
+	if [ "$(uci -q get agent_gateway.main.services_enabled)" = 0 ]; then
+		lan_sdk_enabled=0; no_jwt_lan_enabled=0; transport=disabled
+	fi
 	config_load agent
 	config_get_bool public_enabled main public_ipv6_enabled 0
 	config_get public_prefix main public_ipv6_prefix
@@ -161,6 +171,15 @@ start_service() {
 		esac
 	fi
 	if [ "$public_enabled" -eq 1 ]; then
+		# Automatic/PD prefixes are runtime observations, not persistent UCI
+		# values. Use the same validated resolver as agentd and agent-netd.
+		# Keep the already configured LAN instance available when WAN is absent.
+		[ -x /usr/libexec/nexus-agent-public-ipv6 ] || return 1
+		public_resolution="$(/usr/libexec/nexus-agent-public-ipv6 resolve)" || return 1
+		public_ready="$(printf '%s' "$public_resolution" | jsonfilter -e '@.ready')"
+		[ "$public_ready" = true ] || [ "$public_ready" = 1 ] || return 1
+		public_prefix="$(printf '%s' "$public_resolution" | jsonfilter -e '@.prefix')"
+		public_network="$(printf '%s' "$public_resolution" | jsonfilter -e '@.upstream_network')"
 		[ -n "$public_prefix" ] && [ -s "$token_file" ] || return 1
 		case "$bridge" in 127.0.0.1:*) ;; *) return 1 ;; esac
 		case "$adapter" in 127.0.0.1:*) ;; *) return 1 ;; esac
@@ -192,7 +211,7 @@ start_service() {
 		procd_set_param limits core="0 0" nofile="512 512"
 		procd_set_param stdout 1
 		procd_set_param stderr 1
-		procd_set_param file /etc/config/agent_gateway /etc/config/agentd \
+		procd_set_param file /etc/config/agent_gateway /etc/config/agent \
 			"$token_file"
 		procd_close_instance
 		[ "$transport" = mtls ] || return 0
@@ -236,9 +255,17 @@ start_service() {
 	procd_set_param stderr 1
 	procd_set_param file /etc/config/agent_gateway "$cert" "$key" "$client_ca"
 	procd_close_instance
+	if [ "$public_enabled" -eq 1 ] && [ "$transport" = mtls ] &&
+		[ "$(uci -q get agent_gateway.main.invoke_enabled)" = 1 ]; then
+		/usr/libexec/nexus-agent-ingress-firewall apply "$public_prefix" "$public_port" "$public_network" || {
+			logger -t agent-edge 'Managed IPv6 ingress firewall is not ready; check the upstream network and fw4'
+			return 1
+		}
+	fi
 }
 
 stop_service() {
+	/usr/libexec/nexus-agent-ingress-firewall clear
 	rm -f "$STUNNEL_CONFIG"
 }
 

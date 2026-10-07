@@ -9,9 +9,9 @@ def _makefile(package: str) -> str:
 
 
 def test_core_package_releases_force_upgrade_of_same_version_development_images():
-    assert "PKG_RELEASE:=25" in _makefile("agentd")
-    assert "PKG_RELEASE:=26" in _makefile("agent-gw")
-    assert "PKG_RELEASE:=7" in _makefile("agent-adapter")
+    assert "PKG_RELEASE:=31" in _makefile("agentd")
+    assert "PKG_RELEASE:=29" in _makefile("agent-gw")
+    assert "PKG_RELEASE:=8" in _makefile("agent-adapter")
 
 
 def test_postinst_recovers_empty_conffiles_and_preserves_replaced_init_scripts():

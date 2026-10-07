@@ -684,6 +684,65 @@ static bool previously_opened_stream(
     return stream_id <= mux->largest_remote_stream_id;
 }
 
+static struct agent_relay_reset_drain *find_reset_drain(
+    struct agent_relay_mux *mux, uint32_t stream_id)
+{
+    size_t i;
+    for (i = 0U; i < AGENT_RELAY_TUNNEL_RESET_HISTORY; i++) {
+        if (mux->reset_drains[i].stream_id == stream_id) {
+            return &mux->reset_drains[i];
+        }
+    }
+    return NULL;
+}
+
+bool agent_relay_mux_send_credit(
+    const struct agent_relay_mux *mux, uint32_t stream_id, uint32_t *credit)
+{
+    size_t i;
+    if (mux == NULL || credit == NULL) return false;
+    for (i = 0U; i < mux->stream_limit; i++) {
+        const struct agent_relay_mux_stream *stream = &mux->streams[i];
+        if (stream->stream_id == stream_id &&
+            stream->state == AGENT_RELAY_MUX_STREAM_ESTABLISHED &&
+            !stream->local_closed) {
+            *credit = stream->send_credit;
+            return true;
+        }
+    }
+    return false;
+}
+
+static enum agent_relay_tunnel_result drain_reset_message(
+    struct agent_relay_reset_drain *drain,
+    const struct agent_relay_tunnel_message *message)
+{
+    if (message->type != AGENT_RELAY_TUNNEL_DATA &&
+        message->type != AGENT_RELAY_TUNNEL_END &&
+        message->type != AGENT_RELAY_TUNNEL_RESET &&
+        message->type != AGENT_RELAY_TUNNEL_WINDOW_UPDATE) {
+        return AGENT_RELAY_TUNNEL_INVALID_STATE;
+    }
+    if (drain->next_receive_sequence == UINT64_MAX ||
+        message->sequence != drain->next_receive_sequence) {
+        return AGENT_RELAY_TUNNEL_SEQUENCE_ERROR;
+    }
+    if (message->type == AGENT_RELAY_TUNNEL_DATA) {
+        if (message->data_length > drain->receive_credit) {
+            return AGENT_RELAY_TUNNEL_FLOW_CONTROL;
+        }
+        drain->receive_credit -= (uint32_t)message->data_length;
+    } else if (message->type == AGENT_RELAY_TUNNEL_END ||
+               message->type == AGENT_RELAY_TUNNEL_RESET) {
+        memset(drain, 0, sizeof(*drain));
+        return AGENT_RELAY_TUNNEL_OK;
+    } else if (message->type != AGENT_RELAY_TUNNEL_WINDOW_UPDATE) {
+        return AGENT_RELAY_TUNNEL_INVALID_STATE;
+    }
+    drain->next_receive_sequence++;
+    return AGENT_RELAY_TUNNEL_OK;
+}
+
 static enum agent_relay_tunnel_result apply_message(
     struct agent_relay_mux *mux,
     const struct agent_relay_tunnel_message *message,
@@ -710,6 +769,15 @@ static enum agent_relay_tunnel_result apply_message(
     }
     stream = find_stream(mux, message->stream_id);
     if (stream == NULL) {
+        struct agent_relay_reset_drain *drain = sending ? NULL :
+            find_reset_drain(mux, message->stream_id);
+        if (drain != NULL) {
+            enum agent_relay_tunnel_result result =
+                drain_reset_message(drain, message);
+            if (result == AGENT_RELAY_TUNNEL_OK) mux->frames_received++;
+            else mux->protocol_errors++;
+            return result;
+        }
         /* END frames in opposite directions can cross in flight. A peer may
          * therefore receive credit that was valid when sent after it has
          * observed both ENDs and released the stream. Like HTTP/2, ignore
@@ -808,6 +876,15 @@ static enum agent_relay_tunnel_result apply_message(
     }
     if (message->type == AGENT_RELAY_TUNNEL_RESET) {
         mux->resets++;
+        if (sending && !stream->remote_closed) {
+            struct agent_relay_reset_drain *drain =
+                &mux->reset_drains[mux->next_reset_drain];
+            drain->stream_id = stream->stream_id;
+            drain->next_receive_sequence = stream->next_receive_sequence;
+            drain->receive_credit = stream->receive_credit;
+            mux->next_reset_drain = (mux->next_reset_drain + 1U) %
+                AGENT_RELAY_TUNNEL_RESET_HISTORY;
+        }
         release_stream(mux, stream);
     } else if (stream->local_closed && stream->remote_closed) {
         release_stream(mux, stream);
