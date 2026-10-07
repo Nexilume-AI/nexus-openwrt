@@ -89,7 +89,10 @@ local_health() {
 	local address="$1"
 	case "$address" in 127.0.0.1:[0-9]*|\[::1\]:[0-9]*) ;; *) return 1 ;; esac
 	case "$address" in *[!0-9a-fA-F.:\[\]]*) return 1 ;; esac
-	curl --noproxy '*' -fsS --connect-timeout 1 --max-time 2 --max-filesize 65536 \
+	# OpenWrt curl may use the synchronous SIGALRM resolver, which rejects a
+	# remaining sub-second budget even for numeric hosts. Keep a full second
+	# of headroom without making status checks unbounded.
+	curl --noproxy '*' -fsS --connect-timeout 2 --max-time 3 --max-filesize 65536 \
 		"http://$address/healthz" 2>/dev/null
 }
 
@@ -107,7 +110,7 @@ agent_services_healthy() {
 	lan_port="$(uci_value agent_gateway main lan_sdk_listen 0.0.0.0:7446)"; lan_port="${lan_port##*:}"
 	case "$lan_address" in ''|*[!0-9.]*) return 1 ;; esac
 	case "$lan_port" in ''|*[!0-9]*) return 1 ;; esac
-	metadata="$(curl --noproxy '*' -fsS --connect-timeout 1 --max-time 2 --max-filesize 65536 \
+	metadata="$(curl --noproxy '*' -fsS --connect-timeout 2 --max-time 3 --max-filesize 65536 \
 		"http://$lan_address:$lan_port/agent/v1/authentication" 2>/dev/null)" || return 1
 	[ "$(jsonfilter_value "$metadata" '@.bootstrap.type')" = trusted-lan ]
 }

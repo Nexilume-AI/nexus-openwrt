@@ -5,6 +5,8 @@ title: 编译 APK、安装与启动
 
 # 从源码编译 APK、安装并启动
 
+安装已构建的 25.12.4 x86/64 软件包，请阅读[签名包安装指南](../../../package-install.md)。以下步骤用于自行构建。
+
 这条流程在 **Linux x86_64 电脑编译，OpenWrt 路由器安装运行**。以下可复制示例固定使用 OpenWrt **25.12.4、x86/64**；这是本项目的构建基线，不表示最新版本。准备专用的新 SDK，避免混入旧包。CMake 主机测试不会产出 OpenWrt APK。
 
 ## 1. 确认路由器版本与架构（路由器 SSH）
@@ -29,7 +31,7 @@ mkdir -p "$HOME/nexus-work"
 cd "$HOME/nexus-work"
 ```
 
-将本仓库源码解压或检出到 `$HOME/nexus-work/nexus-openwrt`。该目录应直接包含 `feed/`、`scripts/` 和 `CMakeLists.txt`，不是上层混合产品目录。当前未发布 GitHub URL，不使用占位仓库执行 `git clone`。
+将 [Nexilume-AI/nexus-openwrt](https://github.com/Nexilume-AI/nexus-openwrt) 源码解压或检出到 `$HOME/nexus-work/nexus-openwrt`。该目录应直接包含 `feed/`、`scripts/` 和 `CMakeLists.txt`，不是上层混合产品目录。
 
 下载官方 SDK 并核对固定 SHA-256，解压目标目录必须尚不存在：
 

@@ -29,6 +29,6 @@ jobs:
           node tests/test_mesh_profile.js
       - name: Pairing, role recovery and release inventory
         run: |
-          python3 -m pytest tests/test_cloud_pairing_link.py tests/test_role_runtime_recovery.py tests/test_package_release.py -q
+          python3 -m pytest tests/test_cloud_pairing_link.py tests/test_role_runtime_recovery.py tests/test_package_release.py tests/test_luci_save_apply.py -q
       - name: Desktop bundle
         run: python3 -m unittest discover -s deploy/desktop -p 'test_*.py'

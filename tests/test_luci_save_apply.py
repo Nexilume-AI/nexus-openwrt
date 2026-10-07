@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,12 +18,14 @@ def test_all_config_views_save_and_apply_in_one_visible_action():
 
 def test_luci_release_and_device_build_artifact_match():
     makefile = (ROOT / "feed" / "luci-app-agent-router" / "Makefile").read_text(encoding="utf-8")
-    build_script = (ROOT / "scripts" / "build-device-tls-sdk.sh").read_text(encoding="utf-8")
-    assert "PKG_RELEASE:=36" in makefile
-    assert "^PKG_RELEASE:=36$" in build_script
-    assert "luci-app-agent-router-3.1.0-r36.apk" in build_script
-    packager = (ROOT / 'scripts/build-agent-router-luci-apk.sh').read_text(encoding='utf-8')
-    assert 's/#PKG_VERSION/$package_version/g' in packager
+    release = re.search(r"^PKG_RELEASE:=(\d+)$", makefile, re.M)
+    assert release is not None and int(release.group(1)) >= 37
+    build_script = (ROOT / "scripts" / "build-package-release-sdk.sh").read_text(encoding="utf-8")
+    assert "luci-app-agent-router" in build_script
+    release_packager = (ROOT / "scripts" / "package-release.py").read_text(encoding="utf-8")
+    assert 'recipe_field(recipe, "PKG_RELEASE")' in release_packager
+    # The public SDK build uses the feed recipe, not the internal hot-patch
+    # packager (which is deliberately not included in the standalone export).
     assert 'Build/Prepare/luci-app-agent-router' in makefile
     assert 's/#PKG_VERSION/$(PKG_VERSION)-r$(PKG_RELEASE)/g' in makefile
 

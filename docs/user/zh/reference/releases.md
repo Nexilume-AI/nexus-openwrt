@@ -5,7 +5,9 @@ title: 软件包获取与发布批次
 
 # 软件包获取与发布批次
 
-当前仓库定义了源码和 OpenWrt SDK 构建流程，但没有在配置中声明公共二进制下载地址。外部发布前，应由发布方提供带 SHA-256 校验值的同批次软件包仓库或下载页。
+从 [GitHub Releases](https://github.com/Nexilume-AI/nexus-openwrt/releases) 下载已签名的 x86_64 Beta 安装包。每批包含适用目标、软件包清单、签名公钥和 SHA-256 校验值。请遵循[安装指南](../../../package-install.md)，先核对发布说明中的公钥指纹，再信任软件包索引。
+
+首批二进制包仅适用于 **OpenWrt 25.12.4 x86/64**，不是整机固件或离线安装器；系统依赖仍来自匹配的官方软件源。
 
 ## 构建产物位置
 
@@ -21,18 +23,17 @@ bin/packages/<architecture>/nexus_agent_router/
 
 | 使用方式 | 软件包 |
 | --- | --- |
-| 基础 Node | `agent-netd`, `agentd`, `agent-gw`, `agent-adapter`, `nexus-agent-roles`, `luci-app-agent-router` |
-| Node + Relay | 基础 Node + `nexus-agent-relayd` |
-| Node + Directory | 基础 Node + `nexus-agent-directoryd` |
-| 仅命令行、无 LuCI | 去掉 `luci-app-agent-router`，保留其余运行时组件 |
+| Router | `nexus-agent-router`：路由、LuCI、Cloud connector，不安装 Node.js |
+| Router + Relay | `nexus-agent-router-relay`：Router、自建 Relay 和 Node.js |
+| Seed | `nexus-agent-router-seed`：Router、自建 Relay、Directory 和 Node.js |
 
 安装前校验每个文件：
 
 ```sh
-sha256sum *.apk
+sha256sum -c SHA256SUMS
 ```
 
-校验值必须来自与软件包分离、受信任的发布渠道。
+通过受信任渠道核对公钥指纹后，验证 APK 索引签名。校验值本身不证明发布者身份，不要绕过 APK 签名校验。
 
 ## 版本匹配
 

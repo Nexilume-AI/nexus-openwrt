@@ -68,14 +68,23 @@ optional, not a prerequisite for local or cross-router collaboration.
 
 **Choose a supported installation before running commands.** The documented build baseline is **OpenWrt 25.12.4 x86/64**. Other targets require a matching SDK and device validation.
 
-1. Read [choose an installation path](docs/user/en/getting-started/choose-path.md).
-2. Follow [build and install](docs/user/en/getting-started/install.md), including package signing.
+1. Download the signed **x86_64 Beta package feed** from [Releases](https://github.com/Nexilume-AI/nexus-openwrt/releases).
+2. Follow [verify and install](docs/package-install.md), or [build from source](docs/user/en/getting-started/install.md).
 3. Open **Status → Agent Routing → User mode** in LuCI.
 4. Enable **Agent services**, then register and invoke a real SDK Agent.
 5. Add router networking or Cloud enrollment when your deployment needs them.
 
 > [!IMPORTANT]
-> This is a source-release candidate. Desktop launch/build scripts are included, but the current guide does not certify a ready-to-use VM image or every router model. The basic SDK helper does not build the optional Node/Relay/Directory role packages.
+> The package feed targets **OpenWrt 25.12.4 x86/64**. It is not a firmware image or an offline installer. Keep matching official repositories enabled for dependencies. ARM/MIPS and ready-to-use desktop VM images are not covered by this release.
+
+| Installation profile | Choose it for |
+| --- | --- |
+| `nexus-agent-router` | Agent routing, LuCI and the Cloud Relay client; no Node.js dependency |
+| `nexus-agent-router-relay` | Router plus a self-hosted Open Mesh Relay |
+| `nexus-agent-router-seed` | Router plus a self-hosted Relay and Directory |
+
+All three profiles are in one signed archive. Relay/Seed include Node.js; installing
+a profile does not expose a public server or pair with Cloud automatically.
 
 ## Two paths, different purposes
 

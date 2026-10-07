@@ -120,7 +120,9 @@ def test_link_encoding_and_size(suffix):
 
 def test_ca_corruption_private_keys_and_unexpected_pem_rejected():
     ca = certificate()
-    for pem in (ca + "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n", ca + "unexpected\n", "x" * 12289, ca.replace("MI", "XX", 1)):
+    # Deliberately invalid fixture, not a private key shipped with the source.
+    invalid_key = "-----BEGIN {0}-----\nsecret\n-----END {0}-----\n".format("PRIVATE KEY")
+    for pem in (ca + invalid_key, ca + "unexpected\n", "x" * 12289, ca.replace("MI", "XX", 1)):
         data = payload()
         data["trust"] = trust(pem)
         assert parse(data).startswith("FAIL:")

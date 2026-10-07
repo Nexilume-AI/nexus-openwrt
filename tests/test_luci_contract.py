@@ -157,7 +157,9 @@ def main() -> int:
     require("+luci-base +agentd" in makefile, "LuCI package must depend on the native agentd daemon")
     require("LUCI_PKGARCH:=all" in makefile, "LuCI package must be architecture independent")
     require("PKG_VERSION:=3.1.0" in makefile, "focused Router UI package version must be release locked")
-    require("PKG_RELEASE:=36" in makefile, "Network menu LuCI release must be locked")
+    release = re.search(r"^PKG_RELEASE:=(\d+)$", makefile, re.M)
+    require(release is not None and int(release.group(1)) >= 37,
+            "LuCI release must include the synchronous-resolver health probe fix")
     require("+agent-netd" in makefile,
             "public IPv6 UI must install the restricted network executor")
     require("+agent-gw +agent-adapter" in makefile,
@@ -189,6 +191,10 @@ def main() -> int:
         "agent_adapter.main.enabled=$enabled",
     ):
         require(assignment in rpcd_source, f"bounded feature mapping is missing: {assignment}")
+    require("--connect-timeout 1 " not in rpcd_source,
+            "OpenWrt synchronous curl must retain at least one full second for resolution")
+    require(rpcd_source.count("--connect-timeout 2 --max-time 3 --max-filesize 65536") == 2,
+            "Gateway and LAN metadata health checks must remain time/size bounded")
     zh_catalog = package / "po" / "zh_Hans" / "agent-router.po"
     require(zh_catalog.is_file() and 'msgid "User mode"' in zh_catalog.read_text(encoding="utf-8"),
             "user-mode Simplified Chinese catalog is missing")
