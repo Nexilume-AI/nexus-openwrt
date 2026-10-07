@@ -5,6 +5,8 @@ title: Build APKs, install and start
 
 # Build APKs, install and start
 
+For the prebuilt 25.12.4 x86/64 feed, use [signed package installation](../../../package-install.md). Continue below to build your own packages.
+
 Build on a **Linux x86_64 computer**, then install on an **OpenWrt router**.
 These examples pin **OpenWrt 25.12.4, x86/64**, our build baseline, not a claim
 about the latest release. Use a new dedicated SDK. Host CMake tests do not build
@@ -41,7 +43,7 @@ cd "$HOME/nexus-work"
 
 Extract or check out this source repository to `$HOME/nexus-work/nexus-openwrt`.
 That directory must directly contain `feed/`, `scripts/` and `CMakeLists.txt`.
-No GitHub clone URL has been published yet. Download and verify the pinned SDK;
+The source repository is [Nexilume-AI/nexus-openwrt](https://github.com/Nexilume-AI/nexus-openwrt). Download and verify the pinned SDK;
 its extraction directory must not exist:
 
 ```sh

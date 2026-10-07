@@ -15,6 +15,7 @@ const {
   createDirectoryServer,
   loadConfig: loadDirectoryConfig,
 } = require("../directory/nexus-directory");
+const { catalog: relayCatalog, snapshot: relaySnapshot, apply: applyRelayCatalog } = require('../directory/relay-catalog');
 const {
   ArpxDecoder, encodeArpx, encodeArpxMessage,
 } = require("../relay/arpx-control");
@@ -343,6 +344,15 @@ async function main() {
       leaseSeconds: 300,
     },
   }));
+  // Exercise the same bounded update used by LuCI, then serve the actual saved
+  // config. Credentials and existing identity assignments must remain usable.
+  const beforeCatalog = relaySnapshot(directoryConfigPath, directory);
+  const catalogRows = relayCatalog(beforeCatalog.config, beforeCatalog.revision, false).relays
+    .map(({identity_references, ...row}) => row);
+  catalogRows.push({id:'relay-catalog-added',router_id:'catalog-router',domain_id:'catalog.test',
+    endpoint:'https://catalog.test:7446/arpx/v1',connect_ipv4:'192.0.2.40',open_mesh:true});
+  await applyRelayCatalog(directoryConfigPath, {revision:beforeCatalog.revision,relays:catalogRows},
+    {root:directory,enabled:false});
   const directoryRuntime = createDirectoryServer(loadDirectoryConfig(directoryConfigPath));
   await new Promise((resolve, reject) => {
     directoryRuntime.server.once("error", reject);
@@ -539,6 +549,11 @@ async function main() {
     await waitFor(() => a.arpxMessages.some((message) => message.type === 3),
       "Relay did not reflect the capability WITHDRAW");
     assert.strictEqual(runtime.reflector.snapshot().routes, 0);
+    const catalogAssignment = await fetchAssignment(directory, directoryPort,
+      'router-c', 'router-c', 'mesh.local', {current:'relay-p43-1',failed:'relay-p43-1'},
+      '/v1/open-mesh/assignment');
+    assert.strictEqual(catalogAssignment.relay_id, 'relay-catalog-added');
+    assert.strictEqual(catalogAssignment.connect_ipv4, '192.0.2.40');
     const assignmentC = await fetchAssignment(directory, directoryPort,
       "router-c", "router-c", "mesh.local", null,
       "/v1/open-mesh/assignment");

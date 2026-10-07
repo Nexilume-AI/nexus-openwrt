@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=agentd
 PKG_VERSION:=3.1.0
-PKG_RELEASE:=27
+PKG_RELEASE:=33
 
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
@@ -101,6 +101,7 @@ define Build/Compile
 		$(PKG_BUILD_DIR)/agent_card_authorization.c \
 		$(PKG_BUILD_DIR)/agent_card_directory_trust.c \
 		$(PKG_BUILD_DIR)/agent_relay_directory.c \
+		$(PKG_BUILD_DIR)/agent_mesh_profile.c \
 		$(PKG_BUILD_DIR)/agent_relay_bootstrap.c \
 		$(PKG_BUILD_DIR)/agent_relay_tunnel.c \
 		$(PKG_BUILD_DIR)/agent_relay_invoke.c \
@@ -117,6 +118,10 @@ define Build/Compile
 		$(PKG_BUILD_DIR)/static_routes.c \
 		$(TARGET_LDFLAGS) -lubus -lubox -luci -ljson-c -lnghttp2 \
 		-lmbedtls -lmbedx509 -lmbedcrypto
+	$(TARGET_CC) $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -std=c17 -D_GNU_SOURCE \
+		-DAGENT_MESH_PROFILE_CLI -Wall -Wextra -I$(PKG_BUILD_DIR) \
+		-o $(PKG_BUILD_DIR)/agent-mesh-profile $(PKG_BUILD_DIR)/agent_mesh_profile.c \
+		$(TARGET_LDFLAGS) -ljson-c -lmbedcrypto
 	$(TARGET_CC) \
 		$(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -O2 \
 		-std=c17 -D_GNU_SOURCE -Wall -Wextra \
@@ -131,6 +136,7 @@ endef
 define Package/agentd/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/agentd $(1)/usr/sbin/agentd
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/agent-mesh-profile $(1)/usr/sbin/agent-mesh-profile
 
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) ./files/agentctl $(1)/usr/bin/agentctl

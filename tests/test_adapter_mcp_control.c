@@ -54,6 +54,7 @@ static void test_control_methods(void)
         "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}";
     const char call[] =
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"edge_probe\",\"arguments\":{}}}";
+    const char ping[] = "{\"jsonrpc\":\"2.0\",\"id\":\"alive\",\"method\":\"ping\"}";
 
     add_mapping(&registry, "agent://tenant/edge", "edge_probe",
                 "{\"type\":\"object\",\"required\":[\"nonce\"]}");
@@ -93,6 +94,16 @@ static void test_control_methods(void)
                &registry, "agent://tenant/edge", call,
                sizeof(call) - 1U, &response) ==
            ADAPTER_MCP_CONTROL_NOT_CONTROL);
+    assert(adapter_codec_mcp_control(&registry, "agent://tenant/edge", ping,
+               sizeof(ping) - 1U, &response) == ADAPTER_MCP_CONTROL_HANDLED);
+    assert(json_object_object_get_ex(response, "result", &result));
+    assert(json_object_object_length(result) == 0);
+    assert(strcmp(json_object_get_string(json_object_object_get(response, "id")), "alive") == 0);
+    json_object_put(response);
+    response = NULL;
+    assert(adapter_codec_mcp_control(&registry, "agent://tenant/edge",
+               "{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}",
+               strlen("{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}"), &response) == ADAPTER_MCP_CONTROL_INVALID);
 }
 
 static void test_call_envelope_pins_target(void)

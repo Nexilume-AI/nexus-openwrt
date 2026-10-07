@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <limits.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -379,6 +380,12 @@ enum adapter_mcp_control_result adapter_codec_mcp_control(
                                json_object_new_boolean(false));
         json_object_object_add(capabilities, "tools", tool_capability);
         json_object_object_add(result, "capabilities", capabilities);
+    } else if (strcmp(method, "ping") == 0) {
+        result = json_object_new_object();
+        if (result == NULL) {
+            json_object_put(request);
+            return ADAPTER_MCP_CONTROL_OUT_OF_MEMORY;
+        }
     } else if (strcmp(method, "tools/list") == 0) {
         if (registry == NULL || authority == NULL) {
             json_object_put(request);
@@ -476,6 +483,8 @@ static bool extract_mcp(
     struct json_object *id;
     struct json_object *params;
     struct json_object *arguments;
+    struct json_object *meta;
+    struct json_object *token;
     const char *jsonrpc;
     const char *method;
     const char *name;
@@ -496,6 +505,11 @@ static bool extract_mcp(
         json_object_get_type(arguments) != json_type_object) {
         return false;
     }
+    if (json_object_object_get_ex(params, "_meta", &meta) &&
+        (json_object_get_type(meta) != json_type_object ||
+         (json_object_object_get_ex(meta, "progressToken", &token) &&
+          json_object_get_type(token) != json_type_string &&
+          json_object_get_type(token) != json_type_int))) return false;
     if (json_object_get_type(id) == json_type_string) {
         written = snprintf(external_id, AGENT_ADAPTER_TASK_ID_LEN, "%s",
                            json_object_get_string(id));
@@ -732,6 +746,57 @@ static int a2a_error_code(int status)
     return 13;
 }
 
+static bool mcp_string_field(struct json_object *object, const char *name)
+{
+    struct json_object *value;
+    return json_object_object_get_ex(object, name, &value) &&
+           json_object_is_type(value, json_type_string);
+}
+
+/* The versioned SDK wrapper is explicit. Never reinterpret a plain business
+ * object's content/isError keys, or trust an upstream JSON-RPC id. */
+static bool valid_native_mcp_result(struct json_object *result)
+{
+    struct json_object *content, *value;
+    if (!json_object_is_type(result, json_type_object) ||
+        !json_object_object_get_ex(result, "content", &content) ||
+        !json_object_is_type(content, json_type_array) ||
+        json_object_array_length(content) > 256U) return false;
+    json_object_object_foreach(result, key, item) {
+        if (strcmp(key, "content") == 0) continue;
+        if (strcmp(key, "isError") == 0) {
+            if (!json_object_is_type(item, json_type_boolean)) return false;
+        } else if (strcmp(key, "structuredContent") == 0 ||
+                   strcmp(key, "_meta") == 0) {
+            if (!json_object_is_type(item, json_type_object)) return false;
+        } else return false;
+    }
+    for (size_t i = 0; i < json_object_array_length(content); ++i) {
+        struct json_object *block = json_object_array_get_idx(content, i);
+        const char *type;
+        if (!json_object_is_type(block, json_type_object) ||
+            !json_string(block, "type", &type)) return false;
+        if (strcmp(type, "text") == 0) {
+            if (!mcp_string_field(block, "text")) return false;
+        } else if (strcmp(type, "image") == 0 || strcmp(type, "audio") == 0) {
+            if (!mcp_string_field(block, "data") ||
+                !mcp_string_field(block, "mimeType")) return false;
+        } else if (strcmp(type, "resource_link") == 0) {
+            if (!mcp_string_field(block, "uri") ||
+                !mcp_string_field(block, "name")) return false;
+        } else if (strcmp(type, "resource") == 0) {
+            if (!json_object_object_get_ex(block, "resource", &value) ||
+                !json_object_is_type(value, json_type_object) ||
+                !mcp_string_field(value, "uri") ||
+                (!mcp_string_field(value, "text") &&
+                 !mcp_string_field(value, "blob"))) return false;
+        } else return false;
+        if (json_object_object_get_ex(block, "annotations", &value) &&
+            !json_object_is_type(value, json_type_object)) return false;
+    }
+    return true;
+}
+
 static struct json_object *mcp_response(
     const struct adapter_normalized_request *normalized,
     int status,
@@ -770,6 +835,29 @@ static struct json_object *mcp_response(
         json_object_object_add(root, "error", error);
         return root;
     }
+    if (body != NULL && body_length > 0U && content_type_is_json(content_type)) {
+        struct json_object *parsed = parse_json_exact(body, body_length);
+        struct json_object *version, *native;
+        if (parsed != NULL && json_object_is_type(parsed, json_type_object) &&
+            json_object_object_get_ex(parsed, "nexus_mcp_result_version", &version)) {
+            bool valid = json_object_object_length(parsed) == 2 &&
+                json_object_is_type(version, json_type_int) &&
+                json_object_get_int64(version) == 1 &&
+                json_object_object_get_ex(parsed, "result", &native) &&
+                valid_native_mcp_result(native);
+            if (valid) {
+                json_object_object_add(root, "result", json_object_get(native));
+                json_object_put(parsed);
+                return root;
+            }
+            json_object_put(parsed);
+            json_object_put(root);
+            const char invalid[] = "{\"code\":\"INVALID_MCP_TOOL_RESULT\"}";
+            return mcp_response(normalized, 502, "application/json", invalid,
+                                sizeof(invalid) - 1U);
+        }
+        json_object_put(parsed);
+    }
     {
         struct json_object *result = json_object_new_object();
         struct json_object *content = json_object_new_array();
@@ -803,6 +891,113 @@ static struct json_object *mcp_response(
         json_object_object_add(root, "result", result);
     }
     return root;
+}
+
+bool adapter_codec_mcp_event(
+    const struct adapter_normalized_request *normalized,
+    struct adapter_mcp_stream_state *state,
+    const char *event, size_t event_length,
+    struct json_object **message
+)
+{
+    char kind[32] = "message";
+    char *data;
+    size_t offset = 0U, used = 0U;
+    struct json_object *payload = NULL, *value, *params, *meta, *token;
+    bool ok = false;
+
+    if (message == NULL) return false;
+    *message = NULL;
+    if (normalized == NULL || normalized->request == NULL || state == NULL ||
+        event == NULL || event_length > INT_MAX) return false;
+    data = malloc(event_length + 1U);
+    if (data == NULL) return false;
+    /* SSE permits CRLF and multiple data lines. The relay has already bounded
+     * and delimited this event; never inspect beyond its supplied length. */
+    while (offset < event_length) {
+        size_t start = offset, end, colon, first, length;
+        while (offset < event_length && event[offset] != '\n' &&
+               event[offset] != '\r') offset++;
+        end = offset;
+        if (offset < event_length && event[offset++] == '\r' &&
+            offset < event_length && event[offset] == '\n') offset++;
+        if (end == start || event[start] == ':') continue;
+        colon = start;
+        while (colon < end && event[colon] != ':') colon++;
+        first = colon < end ? colon + 1U : end;
+        if (first < end && event[first] == ' ') first++;
+        length = end - first;
+        if (colon - start == 5U && memcmp(event + start, "event", 5U) == 0) {
+            if (length == 0U || length >= sizeof(kind) ||
+                memchr(event + first, '\0', length) != NULL) goto done;
+            memcpy(kind, event + first, length); kind[length] = '\0';
+        } else if (colon - start == 4U &&
+                   memcmp(event + start, "data", 4U) == 0) {
+            if (used > 0U) data[used++] = '\n';
+            memcpy(data + used, event + first, length); used += length;
+        }
+    }
+    if (used == 0U) { ok = true; goto done; }
+    if (state->finished) goto done;
+    data[used] = '\0';
+    payload = parse_json_exact(data, used);
+    if (payload == NULL || json_object_get_type(payload) != json_type_object)
+        goto done;
+    if (strcmp(kind, "progress") == 0) {
+        double current;
+        if (!json_object_object_get_ex(payload, "progress", &value) ||
+            (json_object_get_type(value) != json_type_double &&
+             json_object_get_type(value) != json_type_int)) goto done;
+        current = json_object_get_double(value);
+        if (!isfinite(current) || (state->has_progress &&
+                                  current <= state->progress)) goto done;
+        if (json_object_object_get_ex(payload, "total", &value) &&
+            json_object_get_type(value) != json_type_null &&
+            ((json_object_get_type(value) != json_type_double &&
+              json_object_get_type(value) != json_type_int) ||
+             !isfinite(json_object_get_double(value)))) goto done;
+        if (json_object_object_get_ex(payload, "message", &value) &&
+            json_object_get_type(value) != json_type_null &&
+            json_object_get_type(value) != json_type_string) goto done;
+        state->progress = current; state->has_progress = true;
+        /* A server must not invent progress tokens for clients that did not
+         * request notifications. Preserve the caller's token type and value. */
+        if (!json_object_object_get_ex(normalized->request, "params", &params) ||
+            !json_object_object_get_ex(params, "_meta", &meta) ||
+            !json_object_object_get_ex(meta, "progressToken", &token)) {
+            ok = true; goto done;
+        }
+        if (json_object_get_type(token) != json_type_string &&
+            json_object_get_type(token) != json_type_int) goto done;
+        *message = json_object_new_object();
+        if (*message == NULL) goto done;
+        json_object_object_add(*message, "jsonrpc", json_object_new_string("2.0"));
+        json_object_object_add(*message, "method",
+                               json_object_new_string("notifications/progress"));
+        json_object_object_add(payload, "progressToken", json_object_get(token));
+        json_object_object_add(*message, "params", json_object_get(payload));
+    } else if (strcmp(kind, "result") == 0) {
+        const char *serialized;
+        if (!json_object_object_get_ex(payload, "result", &value)) goto done;
+        serialized = json_object_to_json_string_ext(value, JSON_C_TO_STRING_PLAIN);
+        *message = mcp_response(normalized, 200, "application/json",
+                                serialized, strlen(serialized));
+        if (*message == NULL) goto done;
+        state->finished = true;
+    } else if (strcmp(kind, "error") == 0) {
+        *message = mcp_response(normalized, 502, "application/json", data, used);
+        if (*message == NULL) goto done;
+        state->finished = true;
+    } else {
+        /* Unknown Nexus interactive events cannot be silently presented as a
+         * successful MCP tool call. Fail the stream instead of losing them. */
+        goto done;
+    }
+    ok = true;
+done:
+    json_object_put(payload);
+    free(data);
+    return ok;
 }
 
 static struct json_object *a2a_response(

@@ -41,6 +41,7 @@ enum relay_invoke_role {
     RELAY_INVOKE_TARGET_CONNECTING,
     RELAY_INVOKE_TARGET_SENDING,
     RELAY_INVOKE_TARGET_READING,
+    RELAY_INVOKE_TARGET_RESPONDING,
     RELAY_INVOKE_TRANSIT_OPENING,
     RELAY_INVOKE_TRANSIT_FORWARDING
 };
@@ -73,6 +74,7 @@ struct relay_invoke_slot {
     uint8_t *buffer;
     size_t buffer_length;
     size_t buffer_capacity;
+    size_t response_sent;
     int backend_fd;
     struct uloop_fd backend;
     struct uloop_timeout timeout;
@@ -521,6 +523,49 @@ static void backend_events(struct relay_invoke_slot *slot, unsigned int events)
     (void)uloop_fd_add(&slot->backend, events);
 }
 
+static void pump_target_response(struct relay_invoke_slot *slot)
+{
+    struct agent_relay_tunnel_message message;
+    uint32_t credit;
+    while (slot->response_sent < slot->buffer_length) {
+        size_t chunk = slot->buffer_length - slot->response_sent;
+        if (!agent_peer_transport_tunnel_send_credit(
+                slot->manager->transport, slot->peer_id, slot->stream_id, &credit) &&
+            !agent_peer_listener_tunnel_send_credit(
+                slot->manager->listener, slot->peer_id, slot->stream_id, &credit)) {
+            fail_slot(slot, 502U, "Relay response stream unavailable",
+                      RELAY_INVOKE_RESET_UNAVAILABLE);
+            return;
+        }
+        /* Retain the bounded response and original deadline until the peer
+         * grants more credit; lack of credit is not a protocol error. */
+        if (credit == 0U) return;
+        if (chunk > AGENT_RELAY_TUNNEL_MAX_DATA) chunk = AGENT_RELAY_TUNNEL_MAX_DATA;
+        if (chunk > credit) chunk = credit;
+        memset(&message, 0, sizeof(message));
+        message.type = AGENT_RELAY_TUNNEL_DATA;
+        message.data_length = chunk;
+        memcpy(message.data, slot->buffer + slot->response_sent, chunk);
+        if (!send_tunnel(slot, &message)) {
+            fail_slot(slot, 503U, "Relay response queue is full",
+                      RELAY_INVOKE_RESET_BACKPRESSURE);
+            return;
+        }
+        slot->response_sent += chunk;
+        slot->manager->stats.bytes_sent += chunk;
+    }
+    memset(&message, 0, sizeof(message));
+    message.type = AGENT_RELAY_TUNNEL_END;
+    if (!send_tunnel(slot, &message)) {
+        fail_slot(slot, 503U, "Relay response end queue is full",
+                  RELAY_INVOKE_RESET_BACKPRESSURE);
+        return;
+    }
+    if (slot->internal_gateway) slot->manager->stats.internal_gateway_completed++;
+    slot->manager->stats.completed++;
+    clear_slot(slot);
+}
+
 static void finish_target(struct relay_invoke_slot *slot)
 {
     struct agent_invoke_http_response parsed;
@@ -534,16 +579,14 @@ static void finish_target(struct relay_invoke_slot *slot)
                   RELAY_INVOKE_RESET_PROTOCOL);
         return;
     }
-    if (!send_bytes(slot)) {
-        fail_slot(slot, 503U, "Relay response queue is full",
-                  RELAY_INVOKE_RESET_BACKPRESSURE);
-        return;
+    if (slot->backend_fd >= 0) {
+        uloop_fd_delete(&slot->backend);
+        close(slot->backend_fd);
+        slot->backend_fd = -1;
     }
-    if (slot->internal_gateway) {
-        slot->manager->stats.internal_gateway_completed++;
-    }
-    slot->manager->stats.completed++;
-    clear_slot(slot);
+    slot->role = RELAY_INVOKE_TARGET_RESPONDING;
+    slot->response_sent = 0U;
+    pump_target_response(slot);
 }
 
 static bool send_stream_start(struct relay_invoke_slot *slot)
@@ -1383,15 +1426,22 @@ bool agent_relay_invoke_on_tunnel(
     }
     slot = find_stream(manager, peer_id, message->stream_id, &leg);
     if (slot == NULL) {
-        /* The mux has already established that this can only be a late
-         * WINDOW_UPDATE for a completed stream. It carries no application
-         * state and must not tear down the long-lived Relay session. */
+        /* The mux validates late control frames and bounded, sequenced DATA/
+         * END already in flight when we locally reset a request. Do not
+         * recreate its application state or tear down the shared session. */
         return message->type == AGENT_RELAY_TUNNEL_WINDOW_UPDATE ||
-               message->type == AGENT_RELAY_TUNNEL_RESET;
+               message->type == AGENT_RELAY_TUNNEL_RESET ||
+               message->type == AGENT_RELAY_TUNNEL_DATA ||
+               message->type == AGENT_RELAY_TUNNEL_END;
     }
     if (slot->role == RELAY_INVOKE_TRANSIT_OPENING ||
         slot->role == RELAY_INVOKE_TRANSIT_FORWARDING) {
         handle_transit_message(slot, leg, message);
+        return true;
+    }
+    if (message->type == AGENT_RELAY_TUNNEL_WINDOW_UPDATE &&
+        slot->role == RELAY_INVOKE_TARGET_RESPONDING) {
+        pump_target_response(slot);
         return true;
     }
     if (message->type == AGENT_RELAY_TUNNEL_ACCEPT) {

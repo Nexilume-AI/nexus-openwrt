@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,13 +18,21 @@ def test_all_config_views_save_and_apply_in_one_visible_action():
 
 def test_luci_release_and_device_build_artifact_match():
     makefile = (ROOT / "feed" / "luci-app-agent-router" / "Makefile").read_text(encoding="utf-8")
-    build_script = (ROOT / "scripts" / "build-device-tls-sdk.sh").read_text(encoding="utf-8")
-    assert "PKG_RELEASE:=21" in makefile
-    assert "^PKG_RELEASE:=21$" in build_script
-    assert "luci-app-agent-router-3.1.0-r21.apk" in build_script
+    release = re.search(r"^PKG_RELEASE:=(\d+)$", makefile, re.M)
+    assert release is not None and int(release.group(1)) >= 37
+    build_script = (ROOT / "scripts" / "build-package-release-sdk.sh").read_text(encoding="utf-8")
+    assert "luci-app-agent-router" in build_script
+    release_packager = (ROOT / "scripts" / "package-release.py").read_text(encoding="utf-8")
+    assert 'recipe_field(recipe, "PKG_RELEASE")' in release_packager
+    # The public SDK build uses the feed recipe, not the internal hot-patch
+    # packager (which is deliberately not included in the standalone export).
+    assert 'Build/Prepare/luci-app-agent-router' in makefile
+    assert 's/#PKG_VERSION/$(PKG_VERSION)-r$(PKG_RELEASE)/g' in makefile
 
-def test_directory_ipv4_pins_allow_same_address_for_multiple_urls():
-    settings = (VIEWS / "settings.js").read_text(encoding="utf-8")
-    marker = "relay_directory_connect_ipv4s', _('Optional fixed Directory IPv4 addresses'))"
-    start = settings.index(marker)
-    assert "o.allowduplicates = true;" in settings[start:start + 300]
+def test_both_legacy_views_use_shared_mesh_connection_without_uci_writes():
+    for name in ('settings.js', 'setup.js'):
+        settings = (VIEWS / name).read_text(encoding='utf-8')
+        assert 'meshSetup.render({ clientOnly: true })' in settings
+        assert 'open_mesh_directory_connect_ipv4s' not in settings
+        assert 'open_mesh_directory_endpoints' not in settings
+        assert 'o.write = o.remove = function() {}' in settings

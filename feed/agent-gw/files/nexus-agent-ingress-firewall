@@ -1,0 +1,47 @@
+#!/bin/sh
+# Own one fw4 include, never rewrite /etc/config/firewall or flush nftables.
+set -eu
+rule=/usr/share/nftables.d/chain-pre/input/70-nexus-agent-ingress.nft
+mkdir -p /var/lock
+exec 8>/var/lock/nexus-agent-ingress-firewall.lock
+flock -n 8 || exit 1
+[ ! -L "$rule" ] || exit 1
+
+case "${1:-}" in
+ clear)
+  if [ -f "$rule" ]; then
+   rm -f "$rule"
+   /etc/init.d/firewall reload >/dev/null 2>&1
+  fi
+  exit 0 ;;
+ apply) ;;
+ *) exit 2 ;;
+esac
+
+# No automatic rule for plain HTTP, no JWT or paused Agent services.
+[ "$(uci -q get agent_gateway.main.auth_mode)" = jwt ] || exit 1
+[ "$(uci -q get agent_gateway.main.mtls_enabled)" = 1 ] || exit 1
+[ "$(uci -q get agent_gateway.main.invoke_enabled)" = 1 ] || exit 1
+case "$(uci -q get agent_gateway.main.public_transport || true)" in mtls|auto) ;; *) exit 1 ;; esac
+prefix="${2:-}"; port="${3:-}"; network="${4:-}"
+/usr/libexec/nexus-agent-public-ipv6 validate-prefix "$prefix" >/dev/null || exit 1
+case "$port" in ''|*[!0-9]*) exit 1 ;; esac
+[ "$port" -gt 0 ] && [ "$port" -le 65535 ] || exit 1
+[ -n "$network" ] || network="$(uci -q get agent.main.public_ipv6_upstream_interface || printf wan6)"
+case "$network" in ''|*[!A-Za-z0-9_-]*) exit 1 ;; esac
+device="$(ubus -S call "network.interface.$network" status | jsonfilter -e '@.l3_device')"
+case "$device" in ''|*[!A-Za-z0-9_.:-]*) exit 1 ;; esac
+# This is an INPUT rule for locally assigned /128s within the validated pool,
+# on the detected upstream interface only. No forwarding, LAN or IPv4 rule.
+content="iifname \"$device\" ip6 daddr $prefix tcp dport $port counter accept comment \"Nexus managed Agent mTLS ingress\""
+if [ -f "$rule" ] && [ "$(cat "$rule")" = "$content" ]; then exit 0; fi
+mkdir -p /usr/share/nftables.d/chain-pre/input
+stage="$(mktemp /tmp/nexus-ingress.XXXXXX)"
+trap 'rm -f "$stage"' EXIT
+if [ -f "$rule" ]; then cp "$rule" "$stage"; else : > "$stage"; fi
+printf '%s\n' "$content" > "$rule"
+if ! fw4 check >/dev/null 2>&1 || ! /etc/init.d/firewall reload >/dev/null 2>&1; then
+ if [ -s "$stage" ]; then cp "$stage" "$rule"; else rm -f "$rule"; fi
+ /etc/init.d/firewall reload >/dev/null 2>&1 || true
+ exit 1
+fi

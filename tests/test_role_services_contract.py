@@ -58,6 +58,9 @@ def main() -> int:
         require(binary in init, f"{name} role command path differs from package install path")
         require("procd_set_param respawn" in init and "procd_set_param limits" in init,
                 f"{name} role lacks bounded restart/resource supervision")
+        require("nexus_role_prepare_runtime" in init and "respawn 3600 30 0" in init,
+                f"{name} must recreate volatile directories and retain slow recovery")
+    require("role-runtime.sh" in makefile, "shared runtime preparation must be packaged")
 
     migration = (package / "files" / "99-nexus-agent-roles-profile").read_text(encoding="utf-8")
     require("relay.enabled" in migration and "directory.enabled" in migration and "mode='all'" in migration,
@@ -66,7 +69,7 @@ def main() -> int:
             "role profile migration must be installed as a UCI default")
     require("nexus-open-mesh-seed-setup" in makefile,
             "the zero-configuration Open Mesh seed setup command must be packaged")
-    require("/v1/open-mesh/assignment" in seed_setup and "default-open-mesh" in seed_setup,
+    require("mesh_seed_status" in seed_setup and "default-open-mesh" in seed_setup,
             "seed setup must expose the dedicated default Mesh realm endpoint")
     require("cloudIngress\": {\"enabled\": false}" in seed_setup,
             "the Open Mesh seed must not implicitly enable Cloud ingress")

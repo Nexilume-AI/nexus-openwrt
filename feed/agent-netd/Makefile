@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=agent-netd
 PKG_VERSION:=0.2.0
-PKG_RELEASE:=3
+PKG_RELEASE:=5
 
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
@@ -15,7 +15,7 @@ define Package/agent-netd
   CATEGORY:=Network
   SUBMENU:=Routing and Redirection
   TITLE:=Restricted Nexus public IPv6 address executor
-  DEPENDS:=+libubus +libubox +procd +jsonfilter
+  DEPENDS:=+libubus +libubox +procd +jsonfilter +kmod-dummy
 endef
 
 define Package/agent-netd/description

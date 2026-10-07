@@ -454,3 +454,33 @@ html[data-nexus-color-scheme="dark"] .ar-shell {
 	.ar-feature-switch,
 	.ar-feature-switch-thumb { transition: none; }
 }
+
+.ar-mesh-setup { min-width: 0; }
+.ar-mesh-flow { display: grid; gap: .8rem; min-width: 0; }
+.ar-mesh-flow p { margin: 0; }
+.ar-mesh-flow label { display: grid; gap: .4rem; }
+.ar-mesh-flow input, .ar-mesh-link { width: 100%; box-sizing: border-box; min-height: 44px; }
+.ar-mesh-link { resize: vertical; overflow-wrap: anywhere; }
+.ar-mesh-steps { display: flex; flex-wrap: wrap; gap: .6rem 1.6rem; padding-left: 1.4rem; color: var(--ar-muted); }
+.ar-mesh-steps [aria-current="step"] { color: var(--ar-ink); font-weight: 700; }
+.ar-mesh-review { border: 1px solid var(--ar-line); border-radius: 8px; padding: 1rem; display: grid; gap: .7rem; }
+.ar-mesh-review h4 { margin: 0; }
+.ar-mesh-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; margin-top: .8rem; }
+.ar-mesh-actions .btn, .ar-mesh-flow > .btn { min-height: 44px; }
+.ar-mesh-facts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .5rem; }
+.ar-mesh-facts dt { color: var(--ar-muted); }
+.ar-mesh-facts dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 620px) {
+	.ar-mesh-actions .btn { flex: 1 1 8rem; white-space: normal; }
+	.ar-mesh-facts { grid-template-columns: 1fr; }
+}
+.ar-directory-catalog { padding: 16px; }
+.ar-directory-relay-list { margin: 12px 0; padding: 0; list-style: none; }
+.ar-directory-relay-list li { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 12px 0; border-bottom: 1px solid var(--ar-line); overflow-wrap: anywhere; }
+.ar-directory-editor-rows { max-height: 55vh; overflow-y: auto; padding: 4px; }
+.ar-directory-relay-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; padding: 12px; border: 1px solid var(--ar-line); }
+.ar-directory-relay-fields label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ar-directory-relay-fields input[type=text] { box-sizing: border-box; width: 100%; min-height: 44px; }
+.ar-directory-relay-fields label.ar-directory-assignment { flex-direction: row; align-items: center; min-height: 44px; }
+.ar-directory-editor button, .ar-directory-catalog button { min-height: 44px; }
+@media (max-width: 600px) { .ar-directory-relay-fields { grid-template-columns: minmax(0, 1fr); } }

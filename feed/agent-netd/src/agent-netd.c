@@ -214,6 +214,16 @@ static bool enable_proxy_ndp(void)
     written = snprintf(path, sizeof(path),
         "/proc/sys/net/ipv6/conf/%s/proxy_ndp", upstream_interface);
     if (written <= 0 || (size_t)written >= sizeof(path)) return false;
+    /* Docker may configure this per-interface sysctl before starting us and
+     * expose /proc/sys read-only. Do not require a redundant privileged write. */
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        char value[8] = {0};
+        ssize_t size = read(fd, value, sizeof(value) - 1U);
+        close(fd);
+        if (size > 0 && (strcmp(value, "1\n") == 0 || strcmp(value, "1") == 0))
+            return true;
+    }
     fd = open(path, O_WRONLY | O_CLOEXEC);
     if (fd < 0) return false;
     written = (int)write(fd, "1\n", 2U);

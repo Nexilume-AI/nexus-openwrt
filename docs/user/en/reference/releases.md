@@ -5,7 +5,9 @@ title: Package acquisition and release batches
 
 # Package acquisition and release batches
 
-The repository defines source and OpenWrt SDK builds but does not currently declare a public binary download URL. Before an external release, the publisher should provide a package repository or download page with SHA-256 checksums.
+Download signed x86_64 Beta package feeds from [GitHub Releases](https://github.com/Nexilume-AI/nexus-openwrt/releases). Each batch includes its target, package manifest, public signing key and SHA-256 checksums. Follow the [installation guide](../../../package-install.md) and verify the key fingerprint in the release notes before trusting the index.
+
+The first binary batch targets **OpenWrt 25.12.4 x86/64**. It is not a firmware image or an offline installer; matching official repositories supply system dependencies.
 
 ## Build output
 
@@ -21,18 +23,17 @@ The accepted reference target uses `x86_64`. Never install x86/64 packages on AR
 
 | Use case | Packages |
 | --- | --- |
-| Base Node | `agent-netd`, `agentd`, `agent-gw`, `agent-adapter`, `nexus-agent-roles`, `luci-app-agent-router` |
-| Node + Relay | Base Node + `nexus-agent-relayd` |
-| Node + Directory | Base Node + `nexus-agent-directoryd` |
-| CLI only | Remove `luci-app-agent-router`; retain runtime components |
+| Router | `nexus-agent-router`: routing, LuCI and Cloud connector; no Node.js |
+| Router + Relay | `nexus-agent-router-relay`: Router, self-hosted Relay and Node.js |
+| Seed | `nexus-agent-router-seed`: Router, self-hosted Relay, Directory and Node.js |
 
 Verify files before installation:
 
 ```sh
-sha256sum *.apk
+sha256sum -c SHA256SUMS
 ```
 
-Checksums must come from a trusted channel separate from the package files.
+Compare the signing-key fingerprint through a trusted channel, then verify the signed APK index. Checksums alone do not establish authenticity. Never bypass APK signature validation.
 
 ## Version matching
 

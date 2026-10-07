@@ -7,6 +7,9 @@ project_dir="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 repo_dir="${2:-$project_dir}"
 artifact_dir="${3:-$repo_dir/.tmp/open-mesh-e2e/artifacts}"
 log_file="${4:-$repo_dir/.tmp/open-mesh-e2e/open-mesh-seed-build.log}"
+reuse_dependencies="${NEXUS_SDK_REUSE_DEPENDENCIES:-}"
+role_version="$(sed -n 's/^PKG_VERSION:=//p' "$repo_dir/feed/nexus-agent-services/Makefile")-r$(sed -n 's/^PKG_RELEASE:=//p' "$repo_dir/feed/nexus-agent-services/Makefile")"
+case "$reuse_dependencies" in ''|1) ;; *) exit 2 ;; esac
 
 test -f "$sdk_dir/Makefile"
 test -f "$repo_dir/feed/nexus-node-runtime/Makefile"
@@ -36,13 +39,14 @@ make defconfig
 
 : >"$log_file"
 node_apk="$sdk_dir/bin/packages/x86_64/nexus_agent_router/nexus-node-runtime-20.20.2-r1.apk"
+if [ "$reuse_dependencies" = 1 ]; then test -s "$node_apk"; fi
 if [ ! -f "$node_apk" ]; then
 	make -j4 package/feeds/nexus_agent_router/nexus-node-runtime/compile \
 		V=sc >>"$log_file" 2>&1
 fi
 service_target='package/feeds/nexus_agent_router/nexus-agent-services'
 make "$service_target/clean" >>"$log_file" 2>&1
-make -j4 "$service_target/compile" V=sc >>"$log_file" 2>&1
+make -j4 "$service_target/compile" V=sc NO_DEPS="$reuse_dependencies" >>"$log_file" 2>&1
 
 copy_package() {
 	pattern="$1"
@@ -52,14 +56,14 @@ copy_package() {
 }
 
 copy_package 'nexus-node-runtime-20.20.2-r1.apk'
-copy_package 'nexus-agent-roles-1.2.0-r2.apk'
-copy_package 'nexus-agent-relayd-1.2.0-r2.apk'
-copy_package 'nexus-agent-directoryd-1.2.0-r2.apk'
+copy_package "nexus-agent-roles-$role_version.apk"
+copy_package "nexus-agent-relayd-$role_version.apk"
+copy_package "nexus-agent-directoryd-$role_version.apk"
 copy_package 'libstdcpp6-*.apk'
 copy_package 'libatomic1-*.apk'
 copy_package 'libcares-*.apk'
 
 sha256sum "$artifact_dir"/nexus-node-runtime-20.20.2-r1.apk \
-	"$artifact_dir"/nexus-agent-roles-1.2.0-r2.apk \
-	"$artifact_dir"/nexus-agent-relayd-1.2.0-r2.apk \
-	"$artifact_dir"/nexus-agent-directoryd-1.2.0-r2.apk
+	"$artifact_dir"/nexus-agent-roles-"$role_version".apk \
+	"$artifact_dir"/nexus-agent-relayd-"$role_version".apk \
+	"$artifact_dir"/nexus-agent-directoryd-"$role_version".apk

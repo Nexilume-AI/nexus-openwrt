@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
 project(nexus_openwrt_route_core LANGUAGES C)
 
+# The protocol codec depends only on json-c and the portable adapter contract.
+# Keep these checks available on host builds with json-c installed.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(ADAPTER_JSONC QUIET IMPORTED_TARGET json-c)
+endif()
+
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -32,6 +39,17 @@ add_library(agent_recovery STATIC
 add_library(agent_peer_core STATIC
     feed/agentd/src/peer_table.c
 )
+
+# Host regression for the product pause gate; only UCI is stubbed. Execute
+# the actual reload and peer-table code without requiring an OpenWrt host.
+if(NOT MSVC)
+    add_executable(test_static_peer_pause tests/test_static_peer_pause.c
+        feed/agentd/src/static_peers.c)
+    target_include_directories(test_static_peer_pause PRIVATE tests/stubs/static-peers)
+    target_link_libraries(test_static_peer_pause PRIVATE agent_peer_core)
+    target_compile_options(test_static_peer_pause PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+    add_test(NAME static_peer_pause COMMAND test_static_peer_pause)
+endif()
 
 add_library(agent_peer_routes STATIC
     feed/agentd/src/agent_peer_routes.c
@@ -875,6 +893,36 @@ else()
 endif()
 
 add_test(NAME adapter_ingress_contract COMMAND test_adapter_ingress_contract)
+
+if(ADAPTER_JSONC_FOUND)
+    add_library(adapter_codec_host STATIC feed/agent-adapter/src/adapter_codec.c)
+    target_include_directories(adapter_codec_host PUBLIC feed/agent-adapter/src)
+    target_link_libraries(adapter_codec_host PUBLIC agent_adapter_contract PkgConfig::ADAPTER_JSONC)
+    foreach(codec_test adapter_mcp_control adapter_mcp_stream)
+        add_executable(test_${codec_test} tests/test_${codec_test}.c)
+        target_link_libraries(test_${codec_test} PRIVATE adapter_codec_host)
+        add_test(NAME ${codec_test} COMMAND test_${codec_test})
+    endforeach()
+endif()
+
+# Exercise the production synchronous Relay response sender when native OpenWrt
+# development headers are installed. Socket/IPC boundaries are substituted;
+# the response parser, sender and stream credit accounting are real code.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ADAPTER_JSONC_FOUND)
+    find_path(RELAY_TEST_UBOX_INCLUDE_DIR libubox/uloop.h)
+    find_path(RELAY_TEST_MBEDTLS_INCLUDE_DIR mbedtls/pk.h)
+    if(RELAY_TEST_UBOX_INCLUDE_DIR AND RELAY_TEST_MBEDTLS_INCLUDE_DIR)
+        add_executable(test_relay_response_credit tests/test_relay_response_credit.c)
+        target_include_directories(test_relay_response_credit PRIVATE
+            feed/agentd/src ${RELAY_TEST_UBOX_INCLUDE_DIR} ${RELAY_TEST_MBEDTLS_INCLUDE_DIR})
+        target_compile_definitions(test_relay_response_credit PRIVATE _GNU_SOURCE EXPECT_CREDIT_RESUME)
+        target_compile_options(test_relay_response_credit PRIVATE -Wall -Wextra -UNDEBUG -ffunction-sections -fdata-sections)
+        target_link_options(test_relay_response_credit PRIVATE -Wl,--gc-sections)
+        target_link_libraries(test_relay_response_credit PRIVATE
+            agent_invoke_contract agent_relay_tunnel PkgConfig::ADAPTER_JSONC)
+        add_test(NAME relay_response_credit COMMAND test_relay_response_credit)
+    endif()
+endif()
 
 add_executable(test_sse_contract tests/test_sse_contract.c)
 target_link_libraries(test_sse_contract PRIVATE agent_sse_contract)

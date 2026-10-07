@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=agent-gw
 PKG_VERSION:=0.22.0
-PKG_RELEASE:=26
+PKG_RELEASE:=29
 
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
@@ -127,6 +127,9 @@ endef
 
 define Package/agent-gw/install
 	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/usr/libexec
+	$(INSTALL_BIN) ./files/lan-auth.sh $(1)/usr/libexec/nexus-agent-lan-auth.sh
+	$(INSTALL_BIN) ./files/nexus-agent-ingress-firewall $(1)/usr/libexec/nexus-agent-ingress-firewall
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/agent-gw $(1)/usr/sbin/agent-gw
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/agent-edge-bridge $(1)/usr/sbin/agent-edge-bridge
 

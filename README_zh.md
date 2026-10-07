@@ -54,14 +54,22 @@ Nexus OpenWrt 可以独立组网，也可以接入 [Nexus Cloud](https://github.
 
 当前安装文档基线为 **OpenWrt 25.12.4 x86/64**。其他架构需要匹配 SDK 和真实设备验收。
 
-1. 阅读[安装路径选择](docs/user/zh/getting-started/choose-path.md)。
-2. 按[安装教程](docs/user/zh/getting-started/install.md)编译、签名并安装。
+1. 从 [Releases](https://github.com/Nexilume-AI/nexus-openwrt/releases) 下载已签名的 **x86_64 Beta 安装包**。
+2. 按[校验与安装指南](docs/package-install.md)安装，也可以[从源码构建](docs/user/zh/getting-started/install.md)。
 3. 打开 **Status → Agent Routing → User mode**。
 4. 启用 **Agent services**，完成一个真实 SDK Agent 的注册和调用。
 5. 按部署需要启用 Router network 或配对 Cloud。
 
 > [!IMPORTANT]
-> 当前是独立源码发布候选。桌面 VM 启动与构建脚本不等于预装镜像已完成真实开机验收；基础构建 helper 不生成可选 Node/Relay/Directory 角色包。不要关闭签名验证，也不要分发内部磁盘、真实配置或私钥。
+> 安装包仅适用于 **OpenWrt 25.12.4 x86/64**，不是整机固件或离线安装器。请保留匹配的官方软件源以获取依赖。本次不覆盖 ARM/MIPS 或预装桌面 VM 镜像。不要关闭签名验证，也不要分发真实配置或私钥。
+
+| 安装档位 | 用途 |
+| --- | --- |
+| `nexus-agent-router` | Agent 路由、LuCI 和 Cloud Relay 客户端，不依赖 Node.js |
+| `nexus-agent-router-relay` | 基础档位 + 自建 Open Mesh Relay |
+| `nexus-agent-router-seed` | 基础档位 + 自建 Relay 和 Directory |
+
+同一个签名压缩包包含三个档位。Relay/Seed 包含 Node.js；安装不会自动对外开放服务或完成 Cloud 配对。
 
 ## 看懂两种连接
 

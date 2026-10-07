@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=nexus-cloud-connector
 PKG_VERSION:=1.1.0
-PKG_RELEASE:=43
+PKG_RELEASE:=45
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
 
@@ -31,6 +31,8 @@ define Build/Compile
 endef
 
 define Package/nexus-cloud-connector/install
+	$(INSTALL_DIR) $(1)/usr/share/nexus-cloud
+	$(INSTALL_DATA) ./files/pairing-link.sh $(1)/usr/share/nexus-cloud/pairing-link.sh
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) ./files/nexus-cloud-connectord $(1)/usr/sbin/nexus-cloud-connectord
 	$(INSTALL_BIN) ./files/nexus-cloud-tls-check $(1)/usr/sbin/nexus-cloud-tls-check

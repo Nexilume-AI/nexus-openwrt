@@ -3,7 +3,7 @@
 		"description": "Read Nexus Agent routing status",
 		"read": {
 			"ubus": {
-				"nexus-agent-ui": [ "overview" ],
+				"nexus-agent-ui": [ "overview", "mesh_status" ],
 				"nexus-cloud": [ "check" ],
 				"agent": [
 					"stats", "recovery", "policy", "routes", "agents", "addresses",
@@ -36,7 +36,7 @@
 		"description": "Configure Nexus Agent routing",
 		"read": {
 			"ubus": {
-				"nexus-agent-ui": [ "overview" ],
+				"nexus-agent-ui": [ "overview", "mesh_status", "directory_relays" ],
 				"nexus-cloud": [ "check" ],
 				"agent": [
 					"stats", "recovery", "policy", "routes", "agents", "addresses",
@@ -58,7 +58,7 @@
 		},
 		"write": {
 			"ubus": {
-				"nexus-agent-ui": [ "set_feature", "pair_cloud", "refresh" ],
+				"nexus-agent-ui": [ "set_feature", "pair_cloud", "refresh", "setup_mesh", "share_mesh", "set_directory_relays" ],
 				"agent": [
 					"reload", "reload_policy", "reload_peers",
 					"discovery_refresh", "cross_discovery_refresh",

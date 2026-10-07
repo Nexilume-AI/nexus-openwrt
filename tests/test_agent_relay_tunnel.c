@@ -392,6 +392,80 @@ static void test_malformed_frame_rejected(void)
            AGENT_RELAY_TUNNEL_INVALID_FRAME);
 }
 
+/* A target rejects an oversized request while DATA/END already admitted by
+ * its last credit grant is still in flight. The rejection must be stream-local. */
+static void test_reset_drains_inflight_request(void)
+{
+    struct agent_relay_mux target;
+    struct agent_relay_tunnel_message m = open_message();
+    assert(agent_relay_mux_init(&target, true, 4U, 4096U));
+    m.stream_id = 2U;
+    assert(agent_relay_mux_on_receive(&target, &m) == AGENT_RELAY_TUNNEL_OK);
+    memset(&m, 0, sizeof(m));
+    m.type = AGENT_RELAY_TUNNEL_ACCEPT; m.stream_id = 2U; m.sequence = 1U;
+    m.status_code = 200U; m.credit_bytes = 65536U;
+    assert(agent_relay_mux_on_send(&target, &m) == AGENT_RELAY_TUNNEL_OK);
+    m.type = AGENT_RELAY_TUNNEL_DATA; m.sequence = 2U; m.data_length = 4096U;
+    assert(agent_relay_mux_on_receive(&target, &m) == AGENT_RELAY_TUNNEL_OK);
+    m.type = AGENT_RELAY_TUNNEL_RESET; m.sequence = 2U; m.reset_code = 4U; m.data_length = 0U;
+    assert(agent_relay_mux_on_send(&target, &m) == AGENT_RELAY_TUNNEL_OK);
+    assert(target.active_streams == 0U);
+    m.type = AGENT_RELAY_TUNNEL_DATA; m.sequence = 3U; m.data_length = 4096U;
+    assert(agent_relay_mux_on_receive(&target, &m) == AGENT_RELAY_TUNNEL_OK);
+    m.type = AGENT_RELAY_TUNNEL_END; m.sequence = 4U; m.data_length = 0U;
+    assert(agent_relay_mux_on_receive(&target, &m) == AGENT_RELAY_TUNNEL_OK);
+    assert(target.active_streams == 0U && target.protocol_errors == 0U);
+    m = open_message(); m.stream_id = 4U;
+    assert(agent_relay_mux_on_receive(&target, &m) == AGENT_RELAY_TUNNEL_OK);
+    assert(target.active_streams == 1U);
+}
+
+static void open_then_reset(struct agent_relay_mux *mux, uint32_t id)
+{
+    struct agent_relay_tunnel_message m = open_message();
+    m.stream_id = id;
+    assert(agent_relay_mux_on_receive(mux, &m) == AGENT_RELAY_TUNNEL_OK);
+    memset(&m, 0, sizeof(m)); m.stream_id = id; m.sequence = 1U;
+    m.type = AGENT_RELAY_TUNNEL_ACCEPT; m.status_code = 200U; m.credit_bytes = 4096U;
+    assert(agent_relay_mux_on_send(mux, &m) == AGENT_RELAY_TUNNEL_OK);
+    m.type = AGENT_RELAY_TUNNEL_RESET; m.sequence = 2U; m.reset_code = 4U;
+    assert(agent_relay_mux_on_send(mux, &m) == AGENT_RELAY_TUNNEL_OK);
+}
+
+static void test_reset_drain_preserves_bounds(void)
+{
+    struct agent_relay_mux mux;
+    struct agent_relay_tunnel_message m;
+    uint32_t i;
+    assert(agent_relay_mux_init(&mux, true, 4U, 4096U));
+    open_then_reset(&mux, 2U);
+    memset(&m, 0, sizeof(m)); m.stream_id = 2U;
+    m.type = AGENT_RELAY_TUNNEL_DATA; m.sequence = 3U; m.data_length = 4096U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_SEQUENCE_ERROR);
+    m.sequence = 2U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_OK);
+    m.sequence = 3U; m.data_length = 1U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_FLOW_CONTROL);
+    m.type = AGENT_RELAY_TUNNEL_WINDOW_UPDATE; m.data_length = 0U; m.credit_bytes = 4096U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_OK);
+    m.type = AGENT_RELAY_TUNNEL_DATA; m.sequence = 4U; m.data_length = 1U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_FLOW_CONTROL);
+    m.type = AGENT_RELAY_TUNNEL_END; m.data_length = 0U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_OK);
+    m.type = AGENT_RELAY_TUNNEL_DATA; m.sequence = 5U; m.data_length = 1U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_INVALID_STATE);
+    m.stream_id = 3U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_INVALID_STATE);
+    for (i = 0U; i <= AGENT_RELAY_TUNNEL_RESET_HISTORY; i++) {
+        open_then_reset(&mux, 4U + 2U * i);
+    }
+    assert(mux.active_streams == 0U);
+    m.stream_id = 4U; m.sequence = 2U;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_INVALID_STATE);
+    m.stream_id = 4U + 2U * AGENT_RELAY_TUNNEL_RESET_HISTORY;
+    assert(agent_relay_mux_on_receive(&mux, &m) == AGENT_RELAY_TUNNEL_OK);
+}
+
 int main(void)
 {
     test_open_round_trip();
@@ -403,6 +477,8 @@ int main(void)
     test_mux_parity_replay_and_limit();
     test_direct_peer_reverse_direction();
     test_malformed_frame_rejected();
+    test_reset_drains_inflight_request();
+    test_reset_drain_preserves_bounds();
     puts("agent relay tunnel tests passed");
     return 0;
 }

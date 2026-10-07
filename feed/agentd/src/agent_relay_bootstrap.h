@@ -2,6 +2,7 @@
 #define NEXUS_AGENT_RELAY_BOOTSTRAP_H
 
 #include "agent_relay_directory.h"
+#include "agent_mesh_profile.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -24,6 +25,8 @@ struct agent_relay_bootstrap_config {
     /* Comma-separated endpoints and optional positionally paired IPv4 pins. */
     char directory_endpoint[AGENT_RELAY_BOOTSTRAP_ENDPOINT_SET_LEN];
     char directory_connect_ipv4[AGENT_RELAY_BOOTSTRAP_IPV4_SET_LEN];
+    /* Only the separate Open Mesh plane may populate this public v2 profile. */
+    char mesh_profile_json[AGENT_MESH_PROFILE_MAX + 1];
     char router_id[AGENT_RELAY_ROUTER_ID_LEN];
     char domain_id[AGENT_RELAY_DOMAIN_ID_LEN];
     char ca_file[AGENT_RELAY_BOOTSTRAP_FILE_LEN];

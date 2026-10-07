@@ -63,7 +63,7 @@ function loadConfig(filename) {
     "maxUsedTickets", "maxCapabilityRoutes", "federation", "cloudIngress",
     "openMesh"], "config");
   strictKeys(config.tls, ["key", "cert", "ca"], "tls");
-  if (net.isIP(config.listen) !== 4 ||
+  if (net.isIP(config.listen) === 0 ||
       !validRouterId(config.relayId) ||
       !validRouterId(config.relayRouterId) ||
       !validDnsName(config.relayDomainId)) {

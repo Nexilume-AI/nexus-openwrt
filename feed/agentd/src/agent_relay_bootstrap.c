@@ -43,6 +43,7 @@ struct agent_relay_bootstrap {
     struct agent_relay_directory_endpoint
         endpoints[AGENT_RELAY_BOOTSTRAP_MAX_DIRECTORIES];
     size_t endpoint_count;
+    struct agent_mesh_profile mesh_profile;
     size_t endpoint_index;
     size_t endpoint_attempts;
     char resolved_directory_ipv4[AGENT_RELAY_IPV4_LEN];
@@ -383,6 +384,15 @@ static int parse_http_response(
         if (parsed > 0) {
             assignment->open_mesh =
                 bootstrap->endpoints[bootstrap->endpoint_index].open_mesh;
+            if (bootstrap->mesh_profile.count) {
+                const struct agent_mesh_path *path = &bootstrap->mesh_profile.paths[bootstrap->endpoint_index];
+                /* Network location comes from the operator-reviewed link, while
+                 * the Directory still supplies identity and signed ticket. */
+                snprintf(assignment->relay_endpoint, sizeof(assignment->relay_endpoint),
+                         "https://relay-seed.mesh.local:%u/arpx/v1", path->relay_port);
+                snprintf(assignment->mesh_connect_host, sizeof(assignment->mesh_connect_host), "%s", path->relay_host);
+                snprintf(assignment->mesh_tls_sha256, sizeof(assignment->mesh_tls_sha256), "%s", bootstrap->mesh_profile.relay_sha256);
+            }
         }
         return parsed;
     }
@@ -455,11 +465,14 @@ static void drive_io(struct agent_relay_bootstrap *bootstrap)
                 &bootstrap->endpoints[bootstrap->endpoint_index];
             uint32_t open_mesh_allowed = MBEDTLS_X509_BADCERT_NOT_TRUSTED |
                 MBEDTLS_X509_BADCERT_CN_MISMATCH;
+            bool pinned = bootstrap->mesh_profile.count != 0;
+            if (pinned) open_mesh_allowed = MBEDTLS_X509_BADCERT_NOT_TRUSTED;
             bool verification_failed = endpoint->open_mesh
                 ? (verify_flags & ~open_mesh_allowed) != 0U
                 : verify_flags != 0U;
 
-        if (result != 0 || verification_failed || negotiated == NULL ||
+        if (result != 0 || verification_failed || (pinned && !agent_mesh_certificate_matches(
+                mbedtls_ssl_get_peer_cert(&bootstrap->tls), bootstrap->mesh_profile.directory_sha256)) || negotiated == NULL ||
             strcmp(negotiated, "http/1.1") != 0) {
             char detail[64];
             char message[AGENT_RELAY_BOOTSTRAP_ERROR_LEN];
@@ -591,6 +604,10 @@ static bool resolve_directory_ipv4(
 bool agent_relay_bootstrap_refresh(struct agent_relay_bootstrap *bootstrap)
 {
     struct sockaddr_in address;
+    struct sockaddr_storage mesh_address;
+    socklen_t address_length = sizeof(address);
+    const struct sockaddr *connect_address = (const struct sockaddr *)&address;
+    int family = AF_INET;
     const struct agent_relay_directory_endpoint *endpoint;
     char connect_ipv4[AGENT_RELAY_IPV4_LEN];
     int flags;
@@ -603,7 +620,16 @@ bool agent_relay_bootstrap_refresh(struct agent_relay_bootstrap *bootstrap)
     }
     endpoint = &bootstrap->endpoints[bootstrap->endpoint_index];
     bootstrap->resolved_directory_ipv4[0] = '\0';
-    if (!resolve_directory_ipv4(endpoint, connect_ipv4)) {
+    if (bootstrap->mesh_profile.count) {
+        const struct agent_mesh_path *path = &bootstrap->mesh_profile.paths[bootstrap->endpoint_index];
+        if (!agent_mesh_resolve(path->directory_host, path->directory_port,
+                bootstrap->failures / bootstrap->endpoint_count, &mesh_address, &address_length)) {
+            schedule_retry(bootstrap, "Mesh Directory address resolution failed"); return false;
+        }
+        family = mesh_address.ss_family;
+        connect_address = (const struct sockaddr *)&mesh_address;
+        connect_ipv4[0] = '\0';
+    } else if (!resolve_directory_ipv4(endpoint, connect_ipv4)) {
         schedule_retry(bootstrap, "Directory DNS resolution failed");
         return false;
     }
@@ -625,13 +651,13 @@ bool agent_relay_bootstrap_refresh(struct agent_relay_bootstrap *bootstrap)
             bootstrap->config.domain_id,
             bootstrap->assignment_active
                 ? bootstrap->assignment.relay_id : "",
-            bootstrap->failed_relay_id, device_token, bootstrap->request,
+            bootstrap->mesh_profile.count ? "" : bootstrap->failed_relay_id, device_token, bootstrap->request,
             sizeof(bootstrap->request), &bootstrap->request_length) !=
         AGENT_RELAY_DIRECTORY_OK) {
         schedule_retry(bootstrap, "failed to build directory request");
         return false;
     }
-    bootstrap->watcher.fd = socket(AF_INET, SOCK_STREAM, 0);
+    bootstrap->watcher.fd = socket(family, SOCK_STREAM, 0);
     if (bootstrap->watcher.fd < 0) {
         schedule_retry(bootstrap, "failed to create directory socket");
         return false;
@@ -645,13 +671,13 @@ bool agent_relay_bootstrap_refresh(struct agent_relay_bootstrap *bootstrap)
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_port = htons(endpoint->port);
-    if (inet_pton(AF_INET, connect_ipv4,
+    if (!bootstrap->mesh_profile.count && inet_pton(AF_INET, connect_ipv4,
                   &address.sin_addr) != 1) {
         schedule_retry(bootstrap, "invalid Directory connect address");
         return false;
     }
     result = connect(bootstrap->watcher.fd,
-                     (const struct sockaddr *)&address, sizeof(address));
+                     connect_address, address_length);
     if (result != 0 && errno != EINPROGRESS) {
         schedule_retry(bootstrap, "directory TCP connect failed");
         return false;
@@ -685,6 +711,12 @@ bool agent_relay_bootstrap_report_relay_failure(
         (void)snprintf(bootstrap->failed_relay_id,
                        sizeof(bootstrap->failed_relay_id), "%s", relay_id);
         increment(&bootstrap->relay_failover_requests);
+        if (bootstrap->mesh_profile.count) {
+            cleanup_io(bootstrap);
+            bootstrap->phase = RELAY_BOOTSTRAP_IDLE;
+            bootstrap->endpoint_index = (bootstrap->endpoint_index + 1) % bootstrap->endpoint_count;
+            increment(&bootstrap->directory_failovers);
+        }
     }
     bootstrap->next_query_ms = bootstrap->now_ms();
     return true;
@@ -756,11 +788,24 @@ struct agent_relay_bootstrap *agent_relay_bootstrap_create(
         bootstrap->phase = RELAY_BOOTSTRAP_DISABLED;
         return bootstrap;
     }
-    if (!agent_relay_directory_endpoint_set_parse(
+    bool endpoints_ok;
+    if (config->mesh_profile_json[0]) {
+        endpoints_ok = agent_mesh_profile_parse(config->mesh_profile_json, &bootstrap->mesh_profile);
+        if (endpoints_ok) {
+            bootstrap->endpoint_count = bootstrap->mesh_profile.count;
+            for (size_t i = 0; i < bootstrap->endpoint_count; ++i) {
+                char endpoint[256];
+                snprintf(endpoint, sizeof(endpoint), "https://directory-seed.mesh.local:%u%s",
+                         bootstrap->mesh_profile.paths[i].directory_port, AGENT_OPEN_MESH_DIRECTORY_PATH);
+                if (!agent_relay_directory_endpoint_parse(endpoint, "", &bootstrap->endpoints[i])) endpoints_ok = false;
+            }
+        }
+    } else endpoints_ok = agent_relay_directory_endpoint_set_parse(
             bootstrap->config.directory_endpoint,
             bootstrap->config.directory_connect_ipv4,
             bootstrap->endpoints, AGENT_RELAY_BOOTSTRAP_MAX_DIRECTORIES,
-            &bootstrap->endpoint_count) || !initialize_tls(bootstrap)) {
+            &bootstrap->endpoint_count);
+    if (!endpoints_ok || !initialize_tls(bootstrap)) {
         set_error(error, error_capacity,
                   "failed to initialize Directory mTLS endpoint");
         free_tls(bootstrap);

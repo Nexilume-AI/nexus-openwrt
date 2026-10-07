@@ -52,6 +52,8 @@ struct agent_relay_assignment {
     uint32_t lease_seconds;
     uint64_t expires_at_ms;
     bool open_mesh;
+    char mesh_connect_host[128];
+    char mesh_tls_sha256[65];
 };
 
 bool agent_relay_directory_endpoint_parse(

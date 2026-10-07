@@ -1862,3 +1862,21 @@ bool agent_peer_listener_tunnel_send(
     }
     return false;
 }
+
+bool agent_peer_listener_tunnel_send_credit(
+    struct agent_peer_listener *manager, const char *peer_id,
+    uint32_t stream_id, uint32_t *credit)
+{
+    size_t index;
+    if (manager == NULL || peer_id == NULL || credit == NULL) return false;
+    for (index = 0U; index < manager->slot_count; index++) {
+        struct listener_peer_slot *slot = &manager->slots[index];
+        struct listener_connection *connection = slot->connection;
+        if (strcmp(slot->peer_id, peer_id) == 0 &&
+            slot->phase == LISTENER_PEER_ESTABLISHED && connection != NULL &&
+            connection->tunnel_response_started &&
+            agent_relay_mux_send_credit(&connection->tunnel_mux, stream_id, credit))
+            return true;
+    }
+    return false;
+}

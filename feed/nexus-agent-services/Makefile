@@ -3,7 +3,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=nexus-agent-services
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=2
+PKG_RELEASE:=11
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -35,7 +35,7 @@ define Package/nexus-agent-directoryd
   CATEGORY:=Network
   SUBMENU:=Routing and Redirection
   TITLE:=Nexus Agent Directory server role
-  DEPENDS:=+nexus-agent-roles +nexus-node-runtime +openssl-util
+  DEPENDS:=+nexus-agent-roles +nexus-node-runtime +openssl-util +coreutils-timeout
   PKGARCH:=all
   USERID:=nexus-directory=458:nexus-directory=458
 endef
@@ -68,6 +68,7 @@ define Build/Prepare
 	$(CP) $(NEXUS_PROJECT_DIR)/relay/*.js $(PKG_BUILD_DIR)/relay/
 	$(CP) $(NEXUS_PROJECT_DIR)/relay/relay.config.example.json $(PKG_BUILD_DIR)/relay/relay.json
 	$(CP) $(NEXUS_PROJECT_DIR)/directory/nexus-directory.js $(PKG_BUILD_DIR)/directory/
+	$(CP) $(NEXUS_PROJECT_DIR)/directory/relay-catalog.js $(PKG_BUILD_DIR)/directory/
 	$(CP) $(NEXUS_PROJECT_DIR)/directory/directory.config.example.json $(PKG_BUILD_DIR)/directory/directory.json
 endef
 
@@ -75,6 +76,10 @@ define Build/Compile
 endef
 
 define Package/nexus-agent-roles/install
+	$(INSTALL_DIR) $(1)/usr/lib/nexus-agent-roles
+	$(INSTALL_DATA) ./files/role-runtime.sh $(1)/usr/lib/nexus-agent-roles/role-runtime.sh
+	$(INSTALL_DATA) ./files/mesh-link.sh $(1)/usr/lib/nexus-agent-roles/mesh-link.sh
+	$(INSTALL_DATA) ./files/mesh-profile.js $(1)/usr/lib/nexus-agent-roles/mesh-profile.js
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/nexus_roles.config $(1)/etc/config/nexus_roles
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
@@ -96,6 +101,7 @@ endef
 define Package/nexus-agent-directoryd/install
 	$(INSTALL_DIR) $(1)/usr/lib/nexus-directory $(1)/usr/lib/relay
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/directory/nexus-directory.js $(1)/usr/lib/nexus-directory/
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/directory/relay-catalog.js $(1)/usr/lib/nexus-directory/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/relay/relay-ticket.js $(1)/usr/lib/relay/
 	$(INSTALL_DIR) $(1)/etc/nexus-directoryd
 	$(INSTALL_CONF) $(PKG_BUILD_DIR)/directory/directory.json $(1)/etc/nexus-directoryd/directory.json

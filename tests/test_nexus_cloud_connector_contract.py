@@ -38,7 +38,7 @@ acl = json.loads(
 )
 
 assert "PKG_NAME:=nexus-cloud-connector" in makefile
-assert "PKG_RELEASE:=43" in makefile
+assert "PKG_RELEASE:=45" in makefile
 for dependency in ("+agentd", "+agent-gw", "+agent-adapter", "+curl", "+jshn", "+openssl-util"):
     assert dependency in makefile
 assert "option enabled '0'" in config
@@ -66,7 +66,9 @@ assert 'if [ "$REENROLLING" -eq 1 ]' in daemon
 assert 'for cloud_url in "$base_url" "$enrollment_url"' in daemon
 assert 'case "$cloud_url" in https://*)' in daemon
 assert 'agent_gateway.main.cloud_public_origin="$enrollment_url"' in daemon
-assert 'agent_gateway.main.cloud_trust_ca_file="$ca_file"' in daemon
+assert 'agent_gateway.main.cloud_trust_ca_file="$public_ca_file"' in daemon
+assert 'config_get public_ca_file main public_ca_file' in daemon
+assert 'request_ca="$public_ca_file"' in daemon
 assert 'ubus call agent agents' in daemon
 assert 'ubus call agent addresses' in daemon
 assert 'ubus call agent relay' in daemon and 'ubus call agent stats' in daemon
@@ -264,9 +266,9 @@ assert "/etc/init.d/agent-jwks restart" not in auth
 trust_start = daemon.index("synchronize_gateway_cloud_trust()")
 trust_end = daemon.index("configure_relay_directory()", trust_start)
 trust = daemon[trust_start:trust_end]
-assert '[ -f "$ca_file" ] && [ ! -L "$ca_file" ]' in trust
+assert '[ -f "$public_ca_file" ] && [ ! -L "$public_ca_file" ]' in trust
 assert 'agent_gateway.main.cloud_public_origin="$enrollment_url"' in trust
-assert 'agent_gateway.main.cloud_trust_ca_file="$ca_file"' in trust
+assert 'agent_gateway.main.cloud_trust_ca_file="$public_ca_file"' in trust
 assert '{"type":"config.change","data":{"package":"agent_gateway"}}' in trust
 enroll_start = daemon.index("enroll_node()")
 enroll_end = daemon.index("next_generation()")
@@ -300,8 +302,8 @@ assert "snapshot_error_stage" in cloud_ui
 assert "'require poll';" in cloud_ui and "'require dom';" in cloud_ui
 assert "poll.add" in cloud_ui and "dom.content" in cloud_ui
 assert "value === 'relay' && relayAvailable === false" not in cloud_ui
-assert menu["admin/status/agent-router/developer/cloud"]["action"]["path"] == "agent-router/cloud"
-assert menu["admin/status/agent-router/cloud"]["action"]["path"] == "admin/status/agent-router/home"
+assert menu["admin/network/agent-router/developer/cloud"]["action"]["path"] == "agent-router/cloud"
+assert menu["admin/network/agent-router/cloud"]["action"]["path"] == "admin/network/agent-router/home"
 configure_acl = acl["luci-app-agent-router-configure"]
 assert "nexus_cloud" in configure_acl["read"]["uci"]
 assert "nexus_cloud" in configure_acl["write"]["uci"]

@@ -2,13 +2,41 @@
 
 set -eu
 
+. /usr/lib/nexus-agent-roles/mesh-link.sh
+if [ "${1:-}" = --status ]; then mesh_seed_status; exit $?; fi
+mkdir -p /var/lock
+exec 8>/var/lock/nexus-open-mesh-seed.lock
+flock -n 8 || exit 1
+
+mesh_seed_preflight || { echo "$MESH_SETUP_CODE" >&2; exit 1; }
+
 seed_ipv4="${1:-$(uci -q get network.lan.ipaddr || true)}"
+seed_ipv4="${seed_ipv4%/*}"
 case "$seed_ipv4" in
 	''|*[!0-9.]*)
 		echo "nexus-open-mesh-seed: unable to determine the Router IPv4 address" >&2
 		exit 1
 		;;
 esac
+printf '%s\n' "$seed_ipv4" | awk -F. 'NF!=4 {exit 1} {for(i=1;i<=4;i++) if($i !~ /^[0-9]+$/ || $i>255) exit 1; if($1==0 || $1==127 || $1>=224) exit 1}' || exit 1
+
+# Repeating setup never rotates tickets, replaces an existing seed identity
+# or clobbers an administrator's service configuration.
+if mesh_seed_status >/dev/null 2>&1; then
+	mesh_seed_status
+	exit 0
+fi
+for config in /etc/nexus-relayd/relay.json /etc/nexus-directoryd/directory.json; do
+	[ ! -L "$config" ] || exit 1
+	if [ -s "$config" ] && ! grep -q 'GENERATE_SHARED_TICKET_KEY' "$config"; then
+		echo 'Existing custom role configuration requires administrator review; nothing was changed.' >&2
+		exit 1
+	fi
+done
+[ ! -e /etc/nexus-open-mesh-seed ] || {
+	echo 'Incomplete seed identity requires repair; existing material was preserved.' >&2
+	exit 1
+}
 
 command -v node >/dev/null 2>&1 || {
 	echo "nexus-open-mesh-seed: Nexus Node runtime is not installed" >&2
@@ -52,6 +80,41 @@ firewall_zone="$(uci show firewall 2>/dev/null | sed -n \
 	exit 1
 }
 
+# Refuse to commit somebody else's pending UCI edits. Roll back only the
+# explicit files and service state owned by this first-time setup.
+[ -z "$(uci changes firewall)$(uci changes nexus_roles)" ] || exit 1
+for section in nexus_open_mesh_relay nexus_open_mesh_directory; do
+	[ -z "$(uci -q get firewall.$section || true)" ] || {
+		echo 'Existing seed firewall rules require administrator review.' >&2; exit 1;
+	}
+done
+relay_was_enabled=0; directory_was_enabled=0
+/etc/init.d/nexus-relayd enabled && relay_was_enabled=1
+/etc/init.d/nexus-directoryd enabled && directory_was_enabled=1
+backup="$(mktemp -d /tmp/nexus-seed-setup.XXXXXX)"
+chmod 0700 "$backup"
+for config in /etc/config/nexus_roles /etc/config/firewall "$relay_config" "$directory_config"; do
+	[ ! -L "$config" ] || exit 1
+	[ ! -f "$config" ] || cp -p "$config" "$backup/$(basename "$config")"
+done
+rollback_seed() {
+	/etc/init.d/nexus-relayd stop >/dev/null 2>&1 || true
+	/etc/init.d/nexus-directoryd stop >/dev/null 2>&1 || true
+	for config in /etc/config/nexus_roles /etc/config/firewall "$relay_config" "$directory_config"; do
+		if [ -f "$backup/$(basename "$config")" ]; then cp -p "$backup/$(basename "$config")" "$config"
+		else rm -f "$config"; fi
+	done
+	# This exact directory was proven absent before creation above.
+	rm -rf /etc/nexus-open-mesh-seed
+	/etc/init.d/firewall reload >/dev/null 2>&1 || true
+	[ "$relay_was_enabled" = 1 ] || /etc/init.d/nexus-relayd disable
+	[ "$directory_was_enabled" = 1 ] || /etc/init.d/nexus-directoryd disable
+	/etc/init.d/nexus-relayd reload >/dev/null 2>&1 || true
+	/etc/init.d/nexus-directoryd reload >/dev/null 2>&1 || true
+}
+trap 'result=$?; trap - EXIT HUP INT TERM; rollback_seed; exit "$result"' EXIT
+trap 'exit 1' HUP INT TERM
+
 umask 077
 mkdir -p "$seed_dir" /etc/nexus-relayd /etc/nexus-directoryd \
 	/var/lib/nexus-relayd /var/lib/nexus-directoryd
@@ -91,7 +154,7 @@ ticket_secret="$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\r\n')"
 
 cat >"$relay_config" <<EOF
 {
-  "listen": "0.0.0.0",
+  "listen": "::",
   "port": $relay_port,
   "tls": {
     "key": "$seed_dir/relay.key",
@@ -124,7 +187,7 @@ EOF
 
 cat >"$directory_config" <<EOF
 {
-  "listen": "0.0.0.0",
+  "listen": "::",
   "port": $directory_port,
   "directoryId": "open-mesh-directory",
   "tls": {
@@ -170,6 +233,7 @@ set nexus_roles.relay.enabled='1'
 set nexus_roles.relay.config_file='$relay_config'
 set nexus_roles.directory.enabled='1'
 set nexus_roles.directory.config_file='$directory_config'
+set nexus_roles.directory.public_port='$directory_port'
 set firewall.nexus_open_mesh_relay='rule'
 set firewall.nexus_open_mesh_relay.name='Allow-Nexus-Open-Mesh-Relay'
 set firewall.nexus_open_mesh_relay.src='$firewall_zone'
@@ -192,7 +256,12 @@ uci commit firewall
 /etc/init.d/nexus-relayd restart
 /etc/init.d/nexus-directoryd restart
 
-sleep 1
+# Complete verified TLS handshakes against both listeners. PID existence alone
+# does not establish readiness, particularly on slower routers and first boot.
+mesh_seed_wait_ready "$seed_dir/ca.pem" "$relay_port" "$directory_port" || {
+	echo "nexus-open-mesh-seed: Relay or Directory TLS listener did not become ready; setup was rolled back" >&2
+	exit 1
+}
 ubus call service list '{"name":"nexus-relayd"}' | grep -q '"running": true' || {
 	echo "nexus-open-mesh-seed: Relay failed its service health check" >&2
 	exit 1
@@ -202,8 +271,8 @@ ubus call service list '{"name":"nexus-directoryd"}' | grep -q '"running": true'
 	exit 1
 }
 
-printf 'Open Mesh seed is ready.\n'
-printf 'Directory: https://directory-seed.mesh.local:%s/v1/open-mesh/assignment\n' "$directory_port"
-printf 'Relay: https://relay-seed.mesh.local:%s/arpx/v1\n' "$published_relay_port"
-printf 'Connect IPv4: %s\n' "$seed_ipv4"
-printf 'Realm: %s\n' "$realm_id"
+trap - EXIT HUP INT TERM
+rm -f "$backup/nexus_roles" "$backup/firewall" "$backup/relay.json" "$backup/directory.json"
+rmdir "$backup"
+
+mesh_seed_status

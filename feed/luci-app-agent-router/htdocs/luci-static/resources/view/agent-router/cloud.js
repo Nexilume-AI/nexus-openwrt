@@ -8,6 +8,7 @@
 'require poll';
 'require dom';
 'require agent-router.mode as mode';
+'require agent-router.cloud-pairing as pairing';
 
 const STATUS_FILE = '/var/run/nexus-cloud/status.json';
 const callService = rpc.declare({ object: 'service', method: 'list', params: [ 'name' ], expect: {} });
@@ -50,8 +51,8 @@ function recoverySummary(status) {
 	const labels = {
 		automatic_retry: _('Automatic retry'),
 		reauthorize: _('Pair again'),
-		supply_pairing_code: _('Pairing code required'),
-		replace_pairing_code: _('Replace pairing code'),
+		supply_pairing_code: _('Pairing link required'),
+		replace_pairing_code: _('Pair again'),
 		fix_configuration: _('Fix cloud configuration'),
 		fix_agent_configuration: _('Fix Agent configuration'),
 		enable_relay_or_switch_transport: _('Enable Relay or use Direct IPv6')
@@ -116,7 +117,7 @@ function cloudStatus(status, running) {
 		E('div', { 'class': 'ar-section-heading' }, [
 			E('div', {}, [
 				E('h2', {}, _('Nexus Cloud connection')),
-				E('p', { 'class': 'ar-muted' }, status.message || _('Configure a cloud address and one-time pairing code.'))
+				E('p', { 'class': 'ar-muted' }, status.message || _('Connect using a pairing link from Nexus Cloud.'))
 			]),
 			badge(state.replaceAll('_', ' '), statusTone(state))
 		]),
@@ -138,29 +139,29 @@ function cloudStatus(status, running) {
 	]);
 }
 
-function cloudMap(status) {
+function cloudMap(status, openPairing) {
 	let m, s, o;
 	const relayAvailable = cloudRelayAvailability(status);
 	m = new form.Map('nexus_cloud', _('Cloud Agent hosting'),
-		_('Publish eligible local Agents to Nexus Server through their router-owned public IPv6 addresses. Cloud user authentication stays separate from the router device credential.'));
+		_('Publish eligible local Agents through Direct IPv6 or Cloud Relay. The pairing link manages the Cloud address and certificate trust.'));
 	s = m.section(form.NamedSection, 'main', 'cloud', _('Connection'));
 	s.addremove = false;
 	o = s.option(form.Flag, 'enabled', _('Connect this router to Nexus Cloud'));
 	o.rmempty = false;
-	o = s.option(form.Value, 'base_url', _('Nexus Cloud URL'));
-	o.placeholder = 'https://nexus.example.com';
-	o.rmempty = false;
-	o.validate = function(sectionId, value) {
-		const text = String(value || '');
-		if (!/^https:\/\/[A-Za-z0-9][A-Za-z0-9._:-]*(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?$/.test(text))
-			return _('Enter an HTTPS Nexus Server URL without a query, fragment or user credentials.');
-		return true;
+	o = s.option(form.DummyValue, '_cloud_origin', _('Managed Cloud address'));
+	o.cfgvalue = function() {
+		try {
+			const url = new URL(uci.get('nexus_cloud', 'main', 'enrollment_url') || uci.get('nexus_cloud', 'main', 'base_url') || '');
+			return url.protocol === 'https:' && !url.username && !url.password ? url.origin : _('Not configured');
+		}
+		catch (ignored) { return _('Not configured'); }
 	};
-	o = s.option(form.Value, 'pairing_code', _('One-time pairing code'));
-	o.password = true;
-	o.rmempty = true;
-	o.placeholder = 'pair_…';
-	o.description = _('Generate this code in Nexus Console. On an enrolled Router, entering a new code explicitly replaces the existing Cloud registration. The code is removed immediately after success.');
+	o.description = _('Read only. To change the Cloud connection, use a new pairing link.');
+	o = s.option(form.Button, '_pair_cloud', _('Cloud pairing'));
+	o.inputtitle = _('Pair with Nexus Cloud');
+	o.inputstyle = 'action';
+	o.onclick = openPairing;
+	o.description = _('No manual address, port or certificate download is needed.');
 	o = s.option(form.Value, 'display_name', _('Router display name'));
 	o.placeholder = _('Use system hostname');
 	o.rmempty = true;
@@ -196,51 +197,15 @@ function cloudMap(status) {
 
 	s = m.section(form.NamedSection, 'main', 'cloud', _('Device identity'));
 	s.addremove = false;
-	s.tab('identity', _('Managed identity'));
-	s.tab('advanced', _('Advanced / manual identity'));
-	o = s.taboption('identity', form.ListValue, 'identity_mode', _('Certificate management'));
-	o.value('managed', _('Managed by Nexus Cloud (recommended)'));
-	o.value('manual', _('Use an existing client certificate'));
-	o.default = 'managed';
-	o.rmempty = false;
-	o.description = _('Managed mode creates the private key on this router, sends only a certificate request with the one-time pairing code, and installs the cloud-issued client certificate. The private key never leaves the router.');
-	o = s.taboption('identity', form.DummyValue, '_managed_flow', _('What happens when you connect'));
-	o.rawhtml = true;
+	// Identity and trust are configured by pairing, not by form defaults. Leaving
+	// these UCI options out of the form preserves existing installations on save.
+	o = s.option(form.DummyValue, '_identity_management', _('Certificate management'));
 	o.cfgvalue = function() {
-		return '<ol><li>%s</li><li>%s</li><li>%s</li></ol>'.format(
-			_('A P-256 private key is generated locally with root-only permissions.'),
-			_('Nexus Cloud verifies the one-time pairing code and signs the certificate request.'),
-			_('The router validates the returned chain and key match before installing it.'));
+		return uci.get('nexus_cloud', 'main', 'identity_mode') === 'manual'
+			? _('Existing identity. Pair again to enable automatic certificate management.')
+			: _('Managed by Nexus Cloud');
 	};
-	o.depends('identity_mode', 'managed');
-	o = s.taboption('advanced', form.Value, 'client_cert', _('Device certificate'));
-	o.default = '/etc/nexus-cloud/device.crt';
-	o.rmempty = false;
-	o.description = _('PEM path. Managed mode writes the cloud-issued certificate here; manual mode reads your existing certificate.');
-	o = s.taboption('advanced', form.Value, 'client_key', _('Device private key'));
-	o.default = '/etc/nexus-cloud/device.key';
-	o.password = true;
-	o.rmempty = false;
-	o.description = _('Path only, not private key contents. Managed mode creates this key locally when it is missing.');
-	o = s.taboption('advanced', form.Value, 'ca_file', _('Cloud CA file'));
-	o.default = '/etc/ssl/certs/ca-certificates.crt';
-	o.rmempty = false;
-	o.description = _('Use the system bundle or a CA file below /etc/agent-gw so the JWKS refresher can use the same trust root.');
-	o = s.taboption('advanced', form.Value, 'device_cert_sha256', _('Certificate SHA-256 override'));
-	o.depends('identity_mode', 'manual');
-	o.rmempty = true;
-	o.validate = function(sectionId, value) {
-		if (value && !/^[0-9a-fA-F]{64}$/.test(String(value)))
-			return _('Enter exactly 64 hexadecimal characters.');
-		return true;
-	};
-	o = s.taboption('advanced', form.Value, 'mcp_path', _('Public MCP path prefix'));
-	o.default = '/mcp/';
-	o.rmempty = false;
-	o.description = _('Keep /mcp/. The connector appends the percent-encoded Agent origin so every cloud registration reaches the matching authority.');
-	o.validate = function(sectionId, value) {
-		return value === '/mcp/' ? true : _('The supported MCP path prefix is /mcp/.');
-	};
+	o.description = _('Pairing configures certificates and trust automatically. Managed certificates renew automatically; the private key stays on this Router.');
 	return m;
 }
 
@@ -248,7 +213,20 @@ return view.extend({
 	handleSave: function(ev) {
 		return this.super('handleSave', [ev]).then(function() {
 			return ui.changes.apply(false);
+		}).then(() => {
+			this.formEdited = false;
 		});
+	},
+	openPairing: function() {
+		// Pairing changes managed UCI fields outside this form. Never let an old
+		// form draft overwrite the newly installed identity/trust configuration.
+		return uci.changes().then(changes => {
+			if (this.formEdited || (changes.nexus_cloud || []).length || (changes.agent_gateway || []).length) {
+				ui.addNotification(null, E('p', {}, _('Save & Apply or discard pending configuration changes before pairing.')), 'warning');
+				return;
+			}
+			return pairing.open(() => window.location.reload());
+		}).catch(() => ui.addNotification(null, E('p', {}, _('Could not check pending changes. Refresh this page before pairing.')), 'error'));
 	},
 	loadStatus: function() {
 		return Promise.all([
@@ -270,7 +248,9 @@ return view.extend({
 	render(data) {
 		const status = data[1].status;
 		const running = data[1].running;
-		return cloudMap(status).render().then(formNode => {
+		return cloudMap(status, () => this.openPairing()).render().then(formNode => {
+			formNode.addEventListener('input', () => { this.formEdited = true; });
+			formNode.addEventListener('change', () => { this.formEdited = true; });
 			this.statusRoot = E('div', {}, [ cloudStatus(status, running) ]);
 			poll.add(() => this.loadStatus().then(result => {
 				if (this.statusRoot)

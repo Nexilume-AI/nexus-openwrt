@@ -4,6 +4,7 @@
 #include "agent_peer_session.h"
 #include "agent_peer_transport_contract.h"
 #include "agent_relay_tunnel.h"
+#include "agent_mesh_profile.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -326,13 +327,15 @@ static void slot_fail(struct peer_transport_slot *slot, const char *message)
 {
     uint64_t now = slot->manager->now_ms();
     bool was_up = slot->phase == TRANSPORT_ESTABLISHED;
+    const struct agent_peer *configured = peer_table_find(slot->manager->peers, slot->peer_id);
+    bool retry_mesh_path = configured && configured->open_mesh && configured->mesh_tls_sha256[0];
 
     slot->failures++;
     set_error(slot->last_error, sizeof(slot->last_error), message);
     slot_cleanup_io(slot);
     agent_peer_session_transport_down(&slot->session, now);
     slot->phase = TRANSPORT_BACKOFF;
-    if ((was_up || (slot->relay && !slot->failure_notified)) &&
+    if ((was_up || (slot->relay && (!slot->failure_notified || retry_mesh_path))) &&
         slot->manager->config.session_handler != NULL) {
         if (slot->relay) slot->failure_notified = true;
         slot->manager->config.session_handler(
@@ -1098,10 +1101,13 @@ static void advance_tls(struct peer_transport_slot *slot)
         bool open_mesh_peer = slot->manager->config.open_mesh &&
             (!slot->relay ||
              (configured_peer != NULL && configured_peer->open_mesh));
+        bool pinned = configured_peer && configured_peer->open_mesh && configured_peer->mesh_tls_sha256[0];
+        if (pinned) open_mesh_allowed = MBEDTLS_X509_BADCERT_NOT_TRUSTED;
         const mbedtls_x509_crt *certificate =
             mbedtls_ssl_get_peer_cert(&slot->tls);
 
         if (result != 0 || certificate == NULL ||
+            (pinned && !agent_mesh_certificate_matches(certificate, configured_peer->mesh_tls_sha256)) ||
             (!open_mesh_peer && verify_flags != 0U) ||
             (open_mesh_peer && (verify_flags & ~open_mesh_allowed) != 0U)) {
 
@@ -1247,18 +1253,30 @@ static void slot_io_callback(struct uloop_fd *watcher, unsigned int events)
 static bool start_connect(struct peer_transport_slot *slot)
 {
     struct sockaddr_in address;
+    struct sockaddr_storage mesh_address;
+    socklen_t address_length = sizeof(address);
+    const struct sockaddr *connect_address = (const struct sockaddr *)&address;
+    const struct agent_peer *peer = peer_table_find(slot->manager->peers, slot->peer_id);
+    bool v2 = peer && peer->open_mesh && peer->mesh_tls_sha256[0];
+    int family = AF_INET;
     int fd;
     int result;
 
     slot_cleanup_io(slot);
-    fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (v2) {
+        if (!agent_mesh_resolve(peer->mesh_connect_host, slot->endpoint.port,
+                slot->failures, &mesh_address, &address_length)) return false;
+        family = mesh_address.ss_family;
+        connect_address = (const struct sockaddr *)&mesh_address;
+    }
+    fd = socket(family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         return false;
     }
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_port = htons(slot->endpoint.port);
-    if (inet_pton(AF_INET, slot->endpoint.connect_ipv4,
+    if (!v2 && inet_pton(AF_INET, slot->endpoint.connect_ipv4,
                   &address.sin_addr) != 1) {
         close(fd);
         return false;
@@ -1267,7 +1285,7 @@ static bool start_connect(struct peer_transport_slot *slot)
     slot->watcher.cb = slot_io_callback;
     slot->phase = TRANSPORT_TCP_CONNECTING;
     update_peer_state(slot, AGENT_PEER_STATE_CONNECTING);
-    result = connect(fd, (struct sockaddr *)&address, sizeof(address));
+    result = connect(fd, connect_address, address_length);
     if (result == 0) {
         if (!start_tls(slot)) {
             return false;
@@ -1895,6 +1913,23 @@ bool agent_peer_transport_tunnel_send(
         }
         update_interest(slot);
         return true;
+    }
+    return false;
+}
+
+bool agent_peer_transport_tunnel_send_credit(
+    struct agent_peer_transport_manager *manager, const char *peer_id,
+    uint32_t stream_id, uint32_t *credit)
+{
+    size_t index;
+    if (manager == NULL || peer_id == NULL || credit == NULL) return false;
+    for (index = 0U; index < manager->slot_count; index++) {
+        struct peer_transport_slot *slot = &manager->slots[index];
+        if (strcmp(slot->peer_id, peer_id) == 0 &&
+            slot->phase == TRANSPORT_ESTABLISHED &&
+            slot->tunnel_response_headers_complete &&
+            agent_relay_mux_send_credit(&slot->tunnel_mux, stream_id, credit))
+            return true;
     }
     return false;
 }

@@ -170,6 +170,18 @@ enum peer_table_result static_peers_reload(
     memset(load_result, 0, sizeof(*load_result));
     peer_table_init(&candidate, live_table->max_peers);
 
+    /* Paused Router network must not reconnect static peers when the Cloud
+     * Relay keeps the shared transport alive. Preserve UCI; the enrolled
+     * Cloud assignment is reapplied separately by agentd. */
+    if (getenv("NEXUS_ROUTER_NETWORK_ENABLED") != NULL &&
+        strcmp(getenv("NEXUS_ROUTER_NETWORK_ENABLED"), "0") == 0) {
+        candidate.generation = live_table->generation == UINT64_MAX
+            ? UINT64_MAX : live_table->generation + 1U;
+        peer_table_swap(live_table, &candidate);
+        peer_table_destroy(&candidate);
+        return PEER_TABLE_OK;
+    }
+
     context = uci_alloc_context();
     if (context == NULL) {
         set_error(load_result, NULL, "failed to allocate UCI context");

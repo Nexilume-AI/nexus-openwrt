@@ -5,15 +5,13 @@
 'require dom';
 'require ui';
 'require agent-router.mode as mode';
+'require agent-router.cloud-pairing as pairing';
+'require agent-router.mesh-setup as meshSetup';
 
 const callOverview = rpc.declare({ object: 'nexus-agent-ui', method: 'overview', expect: {} });
 const callSetFeature = rpc.declare({
 	object: 'nexus-agent-ui', method: 'set_feature',
 	params: [ 'feature', 'enabled', 'expected_generation' ], expect: {}
-});
-const callPairCloud = rpc.declare({
-	object: 'nexus-agent-ui', method: 'pair_cloud',
-	params: [ 'pairing_code', 'expected_generation' ], expect: {}
 });
 const callRefresh = rpc.declare({ object: 'nexus-agent-ui', method: 'refresh', expect: {} });
 const callCanConfigure = rpc.declare({
@@ -111,7 +109,9 @@ return view.extend({
 		this.refreshView();
 		const generation = Number(this.payload.overview.generation || 0);
 		return callSetFeature(feature, enabled, generation).then(L.bind(function(result) {
-			this.notifyResult(result, enabled ? _('Feature enabled and verified.') : _('Feature disabled.'));
+			this.notifyResult(result, enabled ? (feature === 'cloud'
+				? _('Cloud service started. Check the connection status below.')
+				: _('Feature enabled and verified.')) : _('Feature disabled.'));
 		}, this)).catch(L.bind(function(error) {
 			ui.addNotification(_('Could not change this feature'), E('p', {}, error.message || String(error)), 'error');
 		}, this)).finally(L.bind(function() {
@@ -136,26 +136,7 @@ return view.extend({
 	},
 
 	pairCloud() {
-		const code = String(this.pairingCode || '').trim();
-		if (!code) {
-			this.pairError = _('Enter the one-time pairing code from Nexus Cloud.');
-			this.refreshView();
-			return;
-		}
-		this.busy = 'cloud';
-		this.pairError = '';
-		this.refreshView();
-		return callPairCloud(code, Number(this.payload.overview.generation || 0)).then(L.bind(function(result) {
-			if (this.notifyResult(result, _('Pairing started. This page will update automatically.'))) {
-				this.pairingCode = '';
-				this.showPairing = false;
-			}
-		}, this)).catch(L.bind(function(error) {
-			ui.addNotification(_('Cloud pairing could not start'), E('p', {}, error.message || String(error)), 'error');
-		}, this)).finally(L.bind(function() {
-			this.busy = '';
-			return this.refresh();
-		}, this));
+		return pairing.open(() => this.refresh().catch(() => this.refreshView()));
 	},
 
 	refreshView() {
@@ -166,10 +147,8 @@ return view.extend({
 	renderRecommended(data) {
 		const action = data.recommended_action;
 		if (action === 'pair_cloud') return E('button', {
-			'class': 'btn cbi-button-action important', 'click': function() {
-				const input = document.getElementById('nexus-pairing-code');
-				if (input) input.focus();
-			}
+			'class': 'btn cbi-button-action important', 'disabled': this.busy ? true : null,
+			'click': L.bind(this.pairCloud, this)
 		}, _('Pair with Nexus Cloud'));
 		if (action === 'enable_router_network') return E('button', {
 			'class': 'btn cbi-button-action important',
@@ -205,39 +184,21 @@ return view.extend({
 	renderCloud(data) {
 		const cloud = data.cloud || {};
 		const paired = !!cloud.paired;
-		const replaceWarning = paired ? E('p', { 'class': 'ar-inline-warning' },
-			_('A new code replaces this Router’s existing Cloud enrollment.')) : '';
 		return E('section', { 'class': 'ar-user-section', 'aria-labelledby': 'ar-cloud-title' }, [
 			E('div', { 'class': 'ar-section-heading' }, [
 				E('div', {}, [ E('h3', { 'id': 'ar-cloud-title' }, _('Nexus Cloud')), E('p', { 'class': 'ar-muted' },
-					paired ? _('This Router has a managed Cloud identity.') : _('Use a one-time code from Nexus Cloud. No address or port is required.')) ]),
+					paired ? _('This Router has a managed Cloud identity.') : _('Paste a pairing link from your trusted Nexus Cloud console. It includes the address and certificate trust.')) ]),
 				E('div', { 'class': 'ar-cloud-summary' }, [
 					badge(cloud.state), E('span', { 'class': 'ar-muted' }, transportLabel(cloud.transport)),
-					paired && this.payload.canConfigure && !this.showPairing ? E('button', {
+					this.payload.canConfigure ? E('button', {
 						'class': 'btn', 'type': 'button', 'disabled': this.busy ? true : null,
-						'click': L.bind(function() { this.showPairing = true; this.refreshView(); }, this)
-					}, _('Pair again')) : ''
+						'click': L.bind(this.pairCloud, this)
+					}, paired ? _('Pair again') : _('Pair with Nexus Cloud')) : ''
 				])
 			]),
 			!cloud.profile_available ? E('div', { 'class': 'alert-message warning ar-status-message' }, [
-				E('strong', {}, _('Cloud profile unavailable')),
-				E('div', {}, _('Update the Router firmware or configure the Cloud address once in Developer mode.'))
-			]) : '',
-			this.payload.canConfigure && cloud.profile_available && (!paired || cloud.state !== 'ready' || this.showPairing) ? E('div', { 'class': 'ar-pairing-row' }, [
-				E('label', { 'for': 'nexus-pairing-code' }, _('One-time pairing code')),
-				E('div', { 'class': 'ar-pairing-controls' }, [
-					E('input', {
-						'id': 'nexus-pairing-code', 'type': 'password', 'autocomplete': 'off',
-						'placeholder': 'pair_…', 'value': this.pairingCode || '',
-						'disabled': this.busy ? true : null,
-						'input': L.bind(function(event) { this.pairingCode = event.target.value; this.pairError = ''; }, this)
-					}),
-					E('button', { 'class': 'btn cbi-button-action important', 'type': 'button',
-						'disabled': this.busy ? true : null, 'click': L.bind(this.pairCloud, this) },
-						this.busy === 'cloud' ? _('Pairing…') : _('Pair with Nexus Cloud'))
-				]),
-				this.pairError ? E('div', { 'class': 'cbi-value-error', 'role': 'alert' }, this.pairError) : '',
-				replaceWarning
+				E('strong', {}, _('Pairing link required')),
+				E('div', {}, _('The pairing link configures the Cloud address and certificate trust automatically.'))
 			]) : '',
 			E('div', { 'class': 'ar-friendly-facts' }, [
 				E('div', {}, [ E('span', { 'class': 'ar-muted' }, _('Cloud Agents')), E('strong', {}, String(count(cloud.registered_agents))) ]),
@@ -253,6 +214,7 @@ return view.extend({
 				E('div', {}, [ E('h3', { 'id': 'ar-neighbor-title' }, _('Neighbor Routers')), E('p', { 'class': 'ar-muted' }, _('Routers discovered by the distributed Agent network.')) ]),
 				E('strong', {}, _('%s online').format(neighbors.filter(item => item.state === 'ready').length))
 			]),
+			this.meshSetupNode || (this.meshSetupNode = meshSetup.render()),
 			neighbors.length ? E('div', { 'class': 'ar-friendly-list' }, neighbors.map(function(item) {
 				return E('div', { 'class': 'ar-friendly-list-row' }, [
 					E('span', { 'class': 'ar-list-symbol', 'aria-hidden': 'true' }, '◇'),
@@ -357,11 +319,9 @@ return view.extend({
 		mode.enterUser();
 		this.payload = payload;
 		this.busy = '';
-		this.pairError = '';
-		this.showPairing = false;
 		this.root = E('div', { 'class': 'cbi-map ar-shell ar-user-page' }, this.renderBody());
 		poll.add(L.bind(function() {
-			if (this.busy || this.pairingCode) return Promise.resolve();
+			if (this.busy) return Promise.resolve();
 			return this.refresh();
 		}, this), 5);
 		return E([], [

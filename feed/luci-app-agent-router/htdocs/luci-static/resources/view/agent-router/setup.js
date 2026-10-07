@@ -4,6 +4,7 @@
 'require uci';
 'require ui';
 'require agent-router.mode as mode';
+'require agent-router.mesh-setup as meshSetup';
 
 function commaList(option, config) {
 	option.cfgvalue = function(sectionId) {
@@ -77,15 +78,11 @@ return view.extend({
 		o.placeholder = 'router-branch-01';
 		o.description = _('One Router ID per entry. Entries are stored in the existing bounded UCI option.');
 
-		s = m.section(form.NamedSection, 'main', 'core', _('Self-hosted Open Mesh Relay'));
+		s = m.section(form.NamedSection, 'main', 'core', _('Open Mesh connection'));
 		s.anonymous = true;
-		o = s.option(form.Flag, 'open_mesh_relay_enabled', _('Connect to an OpenWrt Open Mesh seed'));
-		o.rmempty = false;
-		o.description = _('Nexus Cloud Relay is configured separately on the Cloud page and is never changed here.');
-		o = commaList(s.option(form.DynamicList, 'open_mesh_directory_endpoints', _('Open Mesh Directory URLs')), 'agent');
-		o.depends('open_mesh_relay_enabled', '1');
-		o.placeholder = 'https://directory-seed.mesh.local:18443/v1/open-mesh/assignment';
-		o.description = _('Enter the Open Mesh assignment URL shown by the router hosting the Directory role. Add up to four URLs for failover.');
+		o = s.option(form.DummyValue, '_mesh_connection', _('Mesh client'));
+		o.renderWidget = function() { return meshSetup.render({ clientOnly: true }); };
+		o.write = o.remove = function() {};
 
 		return m.render().then(function(node) {
 			return E([], [

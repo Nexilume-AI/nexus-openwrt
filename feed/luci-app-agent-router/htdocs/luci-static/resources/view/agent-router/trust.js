@@ -8,7 +8,6 @@
 
 const LIST_LIMIT = 200;
 const callDiscoveries = rpc.declare({ object: 'agent', method: 'discoveries', params: [ 'limit' ], expect: {} });
-const callCrossDiscoveries = rpc.declare({ object: 'agent', method: 'cross_discoveries', params: [ 'limit' ], expect: {} });
 const callPromotions = rpc.declare({ object: 'agent', method: 'promotions', params: [ 'limit' ], expect: {} });
 const callCards = rpc.declare({ object: 'agent', method: 'cards', params: [ 'limit' ], expect: {} });
 const callCardTrust = rpc.declare({ object: 'agent', method: 'card_trust', expect: {} });
@@ -34,17 +33,11 @@ function badge(label, kind) {
 	return E('span', { 'class': 'ar-badge ' + (kind || '') }, label);
 }
 
-function evidence(candidate, source) {
+function evidence(candidate) {
 	const values = [];
-	if (source === 'lan') {
-		values.push(badge(_('LAN observed'), 'ar-badge-info'));
-		if (candidate.policy_match) values.push(badge(_('Static policy match'), 'ar-badge-up'));
-		if (candidate.auto_promotion_eligible) values.push(badge(_('Auto eligible'), 'ar-badge-warn'));
-	} else {
-		values.push(badge(candidate.dnssec_secure ? _('DNSSEC secure') : _('DNSSEC rejected'), candidate.dnssec_secure ? 'ar-badge-up' : 'ar-badge-down'));
-		if (candidate.card_authorized) values.push(badge(_('Agent Card authorized'), 'ar-badge-up'));
-		else values.push(badge(_('No authorized Card'), 'ar-badge-warn'));
-	}
+	values.push(badge(_('LAN observed'), 'ar-badge-info'));
+	if (candidate.policy_match) values.push(badge(_('Static policy match'), 'ar-badge-up'));
+	if (candidate.auto_promotion_eligible) values.push(badge(_('Auto eligible'), 'ar-badge-warn'));
 	return E('div', { 'class': 'ar-evidence' }, values);
 }
 
@@ -66,7 +59,6 @@ return view.extend({
 	load() {
 		return Promise.all([
 			settle('LAN discovery', callDiscoveries(LIST_LIMIT), { discoveries: [] }),
-			settle('cross-domain discovery', callCrossDiscoveries(LIST_LIMIT), { discoveries: [] }),
 			settle('promotions', callPromotions(LIST_LIMIT), { promotions: [] }),
 			settle('Agent Cards', callCards(LIST_LIMIT), { cards: [] }),
 			settle('Directory trust', callCardTrust(), { loaded: false, card_keys: [] })
@@ -83,14 +75,10 @@ return view.extend({
 		ui.addNotification(_('Peer trust operation failed'), E('p', {}, error && error.message ? error.message : String(error)), 'error');
 	},
 
-	confirmPromote(candidate, source, generation) {
+	confirmPromote(candidate, generation) {
 		const peerInput = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'value': candidate.router_id || '' });
 		const graceInput = E('input', { 'type': 'number', 'class': 'cbi-input-text', 'min': 5, 'max': 300, 'value': 30 });
-		const proof = source === 'lan'
-			? _('This candidate was observed on the local LAN. Confirming creates a leased direct ARPX peer.')
-			: (candidate.card_authorized
-				? _('DNSSEC discovery and an authorized Agent Card are present.')
-				: _('Only DNSSEC discovery is present. No authorized Agent Card is currently installed.'));
+		const proof = _('This candidate was observed on the local LAN. Confirming creates a leased direct ARPX peer.');
 		ui.showModal(_('Confirm peer trust'), [
 			E('p', {}, proof),
 			E('div', { 'class': 'ar-modal-grid' }, [
@@ -109,7 +97,7 @@ return view.extend({
 						this.notifyError(_('Peer ID is required and graceful restart must be 5–300 seconds.'));
 						return;
 					}
-					return callPromote(source, candidate.router_id, generation, peerId, grace)
+					return callPromote('lan', candidate.router_id, generation, peerId, grace)
 						.then(L.bind(function() {
 							ui.hideModal();
 							ui.addNotification(null, E('p', {}, _('Peer trust confirmed. ARPX runtime is reloading.')), 'info');
@@ -153,24 +141,15 @@ return view.extend({
 		]);
 	},
 
-	pendingRows(lan, cross) {
+	pendingRows(lan) {
 		const rows = [];
 		(lan.discoveries || []).filter(item => !item.promoted).forEach(L.bind(function(item) {
 			rows.push(E('tr', {}, [
 				E('td', {}, [E('code', {}, item.router_id || '—'), E('div', { 'class': 'ar-muted' }, item.domain_id || '—')]),
 				E('td', {}, [item.ipv4 || item.hostname || '—', E('div', { 'class': 'ar-muted' }, _('LAN · %s').format(item.interface || '—'))]),
-				E('td', {}, evidence(item, 'lan')),
+				E('td', {}, evidence(item)),
 				E('td', {}, seconds(item.remaining_ms)),
-				E('td', {}, actionButton(_('Review & trust'), 'cbi-button-action', L.bind(this.confirmPromote, this, item, 'lan', lan.generation)))
-			]));
-		}, this));
-		(cross.discoveries || cross.cross_discoveries || []).filter(item => !item.promoted).forEach(L.bind(function(item) {
-			rows.push(E('tr', {}, [
-				E('td', {}, [E('code', {}, item.router_id || '—'), E('div', { 'class': 'ar-muted' }, item.domain_id || '—')]),
-				E('td', {}, [(item.target || '—') + ':' + (item.port || 0), E('div', { 'class': 'ar-muted ar-code-wrap' }, item.agent_card_uri || _('No Agent Card URI'))]),
-				E('td', {}, evidence(item, 'svcb')),
-				E('td', {}, seconds(item.remaining_ms)),
-				E('td', {}, actionButton(_('Review & trust'), 'cbi-button-action', L.bind(this.confirmPromote, this, item, 'svcb', cross.generation)))
+				E('td', {}, actionButton(_('Review & trust'), 'cbi-button-action', L.bind(this.confirmPromote, this, item, lan.generation)))
 			]));
 		}, this));
 		return rows;
@@ -214,15 +193,14 @@ return view.extend({
 
 	renderBody(data) {
 		const lan = data[0].data || { discoveries: [] };
-		const cross = data[1].data || { discoveries: [] };
-		const promotions = data[2].data || { promotions: [] };
-		const cards = data[3].data || { cards: [] };
-		const trust = data[4].data || { loaded: false, card_keys: [] };
+		const promotions = data[1].data || { promotions: [] };
+		const cards = data[2].data || { cards: [] };
+		const trust = data[3].data || { loaded: false, card_keys: [] };
 		const failures = data.filter(item => !item.ok);
-		const pending = this.pendingRows(lan, cross);
+		const pending = this.pendingRows(lan);
 		return [
 			E('div', { 'class': 'ar-hero' }, [
-				E('div', {}, [E('h2', {}, _('Peer Trust')), E('p', {}, _('Confirm leased Peer relationships from LAN or DNSSEC discovery, revoke admitted peers, and inspect Agent Card and Directory trust evidence.'))]),
+				E('div', {}, [E('h2', {}, _('Peer Trust')), E('p', {}, _('Review LAN candidates, revoke existing peers, and inspect Agent Card and Directory trust evidence.'))]),
 				E('span', { 'class': 'ar-phase' }, _('generation %s').format(promotions.generation || 0))
 			])
 		].concat(failures.map(function(item) {
