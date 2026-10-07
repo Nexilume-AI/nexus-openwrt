@@ -121,8 +121,8 @@ printf 0 > "$clock"
 printf 0 > "$calls"
 date() {{ n=$(cat "$clock"); n=$((n+1)); printf '%s' "$n" > "$clock"; printf '%s' "$n"; }}
 sleep() {{ :; }}
-timeout() {{ test "$1" = 2 || return 99; shift; "$@"; }}
-openssl() {{
+timeout() {{ test "$1" = 5 || return 99; shift; "$@"; }}
+node() {{
   printf '%s\\n' "$*" >> '{root}/arguments'
   n=$(cat "$calls"); n=$((n+1)); printf '%s' "$n" > "$calls"
   case '{mode}' in
@@ -146,11 +146,11 @@ cat '{root}/arguments'
                 result = self.run_readiness(mode)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertIn(b"RESULT=0", result.stdout)
-                self.assertIn(b"-connect 127.0.0.1:17444", result.stdout)
-                self.assertIn(b"-connect 127.0.0.1:18443", result.stdout)
-                self.assertIn(b"-verify_return_error -alpn h2", result.stdout)
-                self.assertIn(b"-verify_hostname directory-seed.mesh.local", result.stdout)
-                self.assertIn(b"-CAfile /isolated/ca.pem", result.stdout)
+                self.assertIn(b"17444 relay-seed.mesh.local /isolated/ca.pem", result.stdout)
+                self.assertIn(b"18443 directory-seed.mesh.local /isolated/ca.pem", result.stdout)
+                self.assertIn(b"rejectUnauthorized: true", result.stdout)
+                self.assertIn(b"socket.authorized", result.stdout)
+                self.assertIn(b'socket.alpnProtocol === "h2"', result.stdout)
 
     def test_unavailable_or_invalid_tls_is_bounded_and_fails_closed(self):
         for mode in ("always_down", "directory_down"):

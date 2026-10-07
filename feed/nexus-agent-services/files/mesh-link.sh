@@ -49,9 +49,20 @@ mesh_seed_wait_ready() {
 	while [ "$(date +%s)" -lt "$deadline" ]; do
 		ready=1
 		for spec in "relay-seed.mesh.local:$relay_port" "directory-seed.mesh.local:$directory_port"; do
-			if ! printf '' | timeout 2 openssl s_client -connect "127.0.0.1:${spec##*:}" \
-				-servername "${spec%%:*}" -verify_hostname "${spec%%:*}" \
-				-CAfile "$ca_file" -verify_return_error -alpn h2 >/dev/null 2>&1; then
+			# Stop at secureConnect, not raw EOF: an HTTP/2 listener can close a
+			# TLS-only probe for not sending a valid HTTP/2 preface after handshake.
+			if ! timeout 5 node -e '
+const tls = require("tls"), fs = require("fs");
+const [port, servername, caFile] = process.argv.slice(1);
+const socket = tls.connect({host: "127.0.0.1", port: Number(port), servername,
+  ca: fs.readFileSync(caFile), rejectUnauthorized: true, minVersion: "TLSv1.3",
+  ALPNProtocols: ["h2", "http/1.1"]}, () => {
+    const valid = socket.authorized && (servername !== "relay-seed.mesh.local" || socket.alpnProtocol === "h2");
+    socket.destroy(); process.exit(valid ? 0 : 1);
+  });
+socket.on("error", () => process.exit(1));
+socket.setTimeout(2000, () => { socket.destroy(); process.exit(1); });
+' "${spec##*:}" "${spec%%:*}" "$ca_file" >/dev/null 2>&1; then
 				ready=0
 				break
 			fi
