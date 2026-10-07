@@ -3,7 +3,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=nexus-agent-services
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=8
+PKG_RELEASE:=9
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -35,7 +35,7 @@ define Package/nexus-agent-directoryd
   CATEGORY:=Network
   SUBMENU:=Routing and Redirection
   TITLE:=Nexus Agent Directory server role
-  DEPENDS:=+nexus-agent-roles +nexus-node-runtime +openssl-util
+  DEPENDS:=+nexus-agent-roles +nexus-node-runtime +openssl-util +coreutils-timeout
   PKGARCH:=all
   USERID:=nexus-directory=458:nexus-directory=458
 endef

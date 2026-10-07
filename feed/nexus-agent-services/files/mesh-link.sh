@@ -11,6 +11,7 @@ mesh_ipv4_valid() {
 mesh_seed_preflight() {
 	MESH_SETUP_CODE=READY
 	if ! command -v node >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 ||
+		! command -v timeout >/dev/null 2>&1 ||
 		[ ! -x /etc/init.d/nexus-relayd ] || [ ! -x /etc/init.d/nexus-directoryd ] ||
 		! id nexus-relay >/dev/null 2>&1 || ! id nexus-directory >/dev/null 2>&1; then
 		MESH_SETUP_CODE=SEED_COMPONENTS_MISSING; return 1

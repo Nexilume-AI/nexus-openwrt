@@ -34,6 +34,13 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertIn("apk verify /root/nexus-feed/packages.adb", guide)
         self.assertNotIn("apk --allow-untrusted", guide)
 
+    def test_seed_installs_bounded_tls_probe_dependency(self):
+        recipe = (ROOT / "feed/nexus-agent-services/Makefile").read_text(encoding="utf-8")
+        directory = recipe.split("define Package/nexus-agent-directoryd\n")[1].split("endef")[0]
+        self.assertIn("+coreutils-timeout", directory)
+        preflight = (ROOT / "feed/nexus-agent-services/files/mesh-link.sh").read_text(encoding="utf-8")
+        self.assertIn("command -v timeout", preflight)
+
 
 if __name__ == "__main__":
     unittest.main()
