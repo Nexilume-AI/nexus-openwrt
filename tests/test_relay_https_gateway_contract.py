@@ -133,7 +133,8 @@ require("state->effective_max_backend_response_bytes" in gateway and
 require("AGENT_IPC_MAX_INVOKE_BODY" in invoke and
         "agent_invoke_backend_response_limit(true, 262144U)" in invoke_test,
         "the internal 16 KiB response clamp needs executable coverage")
-require("PKG_RELEASE:=8" in adapter_make and
+adapter_release = re.search(r"^PKG_RELEASE:=(\d+)$", adapter_make, re.MULTILINE)
+require(adapter_release is not None and int(adapter_release.group(1)) >= 8 and
         "../common/agent_ipc_protocol.h" in adapter_make,
         "agent-adapter must package the public IPC bound used by the invoke contract")
 

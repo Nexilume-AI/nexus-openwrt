@@ -21,3 +21,24 @@
 
 Do not mark these items complete from host unit tests alone. No VM image is
 approved by the existence of the launcher or packaging helper.
+
+## Signed package feed
+
+Use a dedicated OpenWrt 25.12.4 x86/64 SDK and a clean Linux checkout. Build with
+`JOBS=2 sh scripts/build-package-release-sdk.sh /path/to/sdk`. This replaces the
+SDK configuration, selects all three profiles, and can take substantial time
+to compile Node.js. Retain the resulting `.config` and official feed commits.
+
+Commit the release source, then run `python3 scripts/package-release.py --help`.
+The packager takes the SDK, its checksum-verified archive, build configuration,
+a protected signing private key, its public key, a version, and a **new** output
+directory. It selects exact package versions from the recipes, verifies matching
+keys, signs the APK index, and includes licenses, provenance and SHA-256 sums.
+It never copies the SDK or its signing directory wholesale. Keep the private key
+outside release artifacts, with mode `0600` in a `0700` directory; back it up
+through the operator's protected key-management process.
+
+Only publish the explicitly reviewed archive, public key and outer SHA256SUMS.
+Publish the public-key fingerprint in release notes. Run installation, upgrade,
+reboot and invocation tests before publishing; the packager is not an acceptance
+test. Never upload a test VM, SSH private key, live configuration or raw lab logs.

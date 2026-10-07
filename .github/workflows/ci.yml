@@ -13,7 +13,7 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libssl-dev openssl
+          sudo apt-get install -y ninja-build libssl-dev libjson-c-dev openssl python3-pytest python3-cryptography
           node -e "if (Number(process.versions.node.split('.')[0]) < 20) process.exit(1)"
       - name: Host contracts (Debug preserves C assertions)
         run: |
@@ -21,6 +21,14 @@ jobs:
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
       - name: Relay and Directory runtime
-        run: npm --prefix relay test
+        run: |
+          npm --prefix relay test
+          node tests/test_luci_cloud_pairing.js
+          node tests/test_luci_mesh_setup.js
+          node tests/test_luci_role_recovery.js
+          node tests/test_mesh_profile.js
+      - name: Pairing, role recovery and release inventory
+        run: |
+          python3 -m pytest tests/test_cloud_pairing_link.py tests/test_role_runtime_recovery.py tests/test_package_release.py -q
       - name: Desktop bundle
         run: python3 -m unittest discover -s deploy/desktop -p 'test_*.py'
