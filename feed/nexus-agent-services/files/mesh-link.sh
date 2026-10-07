@@ -39,6 +39,29 @@ mesh_seed_preflight() {
 	fi
 }
 
+# A procd PID is visible before Node has loaded its modules and bound TLS.
+# Bound the whole readiness window, and keep certificate/hostname verification
+# on every attempt. A slow start must not trigger a premature setup rollback.
+mesh_seed_wait_ready() {
+	local ca_file="$1" relay_port="$2" directory_port="$3"
+	local deadline spec ready
+	deadline=$(($(date +%s) + 20))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		ready=1
+		for spec in "relay-seed.mesh.local:$relay_port" "directory-seed.mesh.local:$directory_port"; do
+			if ! printf '' | timeout 2 openssl s_client -connect "127.0.0.1:${spec##*:}" \
+				-servername "${spec%%:*}" -verify_hostname "${spec%%:*}" \
+				-CAfile "$ca_file" -verify_return_error -alpn h2 >/dev/null 2>&1; then
+				ready=0
+				break
+			fi
+		done
+		[ "$ready" = 0 ] || return 0
+		sleep 1
+	done
+	return 1
+}
+
 mesh_link_parse() {
 	local payload decoded
 	MESH_PROFILE=''

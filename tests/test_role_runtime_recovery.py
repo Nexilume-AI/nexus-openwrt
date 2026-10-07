@@ -108,5 +108,59 @@ start_service
             self.assertIn("procd_set_param respawn 3600 30 0", source)
 
 
+class SeedReadinessTests(unittest.TestCase):
+    def run_readiness(self, mode):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).as_posix()
+            helper = (FILES / "mesh-link.sh").read_text()
+            script = f"""
+set -eu
+clock='{root}/clock'
+calls='{root}/calls'
+printf 0 > "$clock"
+printf 0 > "$calls"
+date() {{ n=$(cat "$clock"); n=$((n+1)); printf '%s' "$n" > "$clock"; printf '%s' "$n"; }}
+sleep() {{ :; }}
+timeout() {{ test "$1" = 2 || return 99; shift; "$@"; }}
+openssl() {{
+  printf '%s\\n' "$*" >> '{root}/arguments'
+  n=$(cat "$calls"); n=$((n+1)); printf '%s' "$n" > "$calls"
+  case '{mode}' in
+    delayed) [ "$n" -gt 3 ] ;;
+    directory_down) case "$*" in *directory-seed*) return 1;; *) return 0;; esac ;;
+    always_down) return 1 ;;
+    ready) return 0 ;;
+  esac
+}}
+{helper}
+if mesh_seed_wait_ready /isolated/ca.pem 17444 18443; then result=0; else result=$?; fi
+printf 'RESULT=%s CALLS=%s\\n' "$result" "$(cat "$calls")"
+cat '{root}/arguments'
+"""
+            return subprocess.run([BASH, "--noprofile", "--norc", "-s"],
+                                  input=script.encode(), capture_output=True, timeout=10)
+
+    def test_waits_for_both_tls_listeners(self):
+        for mode in ("ready", "delayed"):
+            with self.subTest(mode=mode):
+                result = self.run_readiness(mode)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIn(b"RESULT=0", result.stdout)
+                self.assertIn(b"-connect 127.0.0.1:17444", result.stdout)
+                self.assertIn(b"-connect 127.0.0.1:18443", result.stdout)
+                self.assertIn(b"-verify_return_error -alpn h2", result.stdout)
+                self.assertIn(b"-verify_hostname directory-seed.mesh.local", result.stdout)
+                self.assertIn(b"-CAfile /isolated/ca.pem", result.stdout)
+
+    def test_unavailable_or_invalid_tls_is_bounded_and_fails_closed(self):
+        for mode in ("always_down", "directory_down"):
+            with self.subTest(mode=mode):
+                result = self.run_readiness(mode)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIn(b"RESULT=1", result.stdout)
+                calls = int(result.stdout.decode().split("CALLS=")[1].splitlines()[0])
+                self.assertLessEqual(calls, 40)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@
 - Trusted-LAN registration before Cloud enrollment, Mesh setup/recovery and MCP compatibility fixes.
 - Fix LuCI health checks rejecting healthy services with OpenWrt's synchronous curl resolver.
 - Install the bounded TLS probe dependency needed by guided Mesh Seed setup on stock OpenWrt.
+- Wait for verified Relay/Directory TLS readiness instead of assuming Node listeners start within one second.
 
 This is a Beta package release, not a firmware or preconfigured VM image.
 See the GitHub release notes for target acceptance results and limitations.

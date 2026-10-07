@@ -256,7 +256,12 @@ uci commit firewall
 /etc/init.d/nexus-relayd restart
 /etc/init.d/nexus-directoryd restart
 
-sleep 1
+# Complete verified TLS handshakes against both listeners. PID existence alone
+# does not establish readiness, particularly on slower routers and first boot.
+mesh_seed_wait_ready "$seed_dir/ca.pem" "$relay_port" "$directory_port" || {
+	echo "nexus-open-mesh-seed: Relay or Directory TLS listener did not become ready; setup was rolled back" >&2
+	exit 1
+}
 ubus call service list '{"name":"nexus-relayd"}' | grep -q '"running": true' || {
 	echo "nexus-open-mesh-seed: Relay failed its service health check" >&2
 	exit 1
@@ -266,13 +271,6 @@ ubus call service list '{"name":"nexus-directoryd"}' | grep -q '"running": true'
 	exit 1
 }
 
-# Complete TLS handshakes against both real listeners; PID existence alone
-# cannot establish a usable seed. The private CA is only local to this seed.
-for spec in "relay-seed.mesh.local:$relay_port" "directory-seed.mesh.local:$directory_port"; do
-	printf '' | timeout 5 openssl s_client -connect "127.0.0.1:${spec##*:}" \
-		-servername "${spec%%:*}" -verify_hostname "${spec%%:*}" \
-		-CAfile "$seed_dir/ca.pem" -verify_return_error >/dev/null 2>&1 || exit 1
-done
 trap - EXIT HUP INT TERM
 rm -f "$backup/nexus_roles" "$backup/firewall" "$backup/relay.json" "$backup/directory.json"
 rmdir "$backup"
