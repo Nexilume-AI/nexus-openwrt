@@ -1092,8 +1092,8 @@ size_t agent_invoke_backend_response_limit(
     size_t configured_limit
 )
 {
-    if (internal_invoke && configured_limit > AGENT_IPC_MAX_INVOKE_BODY) {
-        return AGENT_IPC_MAX_INVOKE_BODY;
+    if (internal_invoke && configured_limit > AGENT_INVOKE_MAX_RELAY_RESPONSE) {
+        return AGENT_INVOKE_MAX_RELAY_RESPONSE;
     }
     return configured_limit;
 }
@@ -1146,6 +1146,7 @@ bool agent_invoke_build_internal_http_request(
     const char *target_agent,
     const char *token,
     uint32_t timeout_ms,
+    bool streaming,
     const char *body,
     size_t body_length,
     char *output,
@@ -1191,11 +1192,12 @@ bool agent_invoke_build_internal_http_request(
             output, output_capacity,
             "POST %s HTTP/1.1\r\nHost: [%s]:%u\r\n"
             "Content-Type: application/vnd.nexus.agent-envelope+json\r\n"
-            "Accept: application/json\r\n"
+            "Accept: %s\r\n"
             "Content-Length: %" PRIu64 "\r\nConnection: close\r\n"
             "X-Nexus-Route-Id: %s\r\n%s: %s\r\n%s: %s\r\n%s: %s\r\n"
             "%s: %u\r\n%s\r\n",
             gateway->path, gateway->host, (unsigned int)gateway->port,
+            streaming ? "text/event-stream" : "application/json",
             (uint64_t)body_length, route_id,
             AGENT_INVOKE_INTERNAL_ENDPOINT_HEADER, selected_endpoint,
             AGENT_INVOKE_INTERNAL_ORIGIN_HEADER, selected_origin,
@@ -1207,11 +1209,12 @@ bool agent_invoke_build_internal_http_request(
             output, output_capacity,
             "POST %s HTTP/1.1\r\nHost: %s:%u\r\n"
             "Content-Type: application/vnd.nexus.agent-envelope+json\r\n"
-            "Accept: application/json\r\n"
+            "Accept: %s\r\n"
             "Content-Length: %" PRIu64 "\r\nConnection: close\r\n"
             "X-Nexus-Route-Id: %s\r\n%s: %s\r\n%s: %s\r\n%s: %s\r\n"
             "%s: %u\r\n%s\r\n",
             gateway->path, gateway->host, (unsigned int)gateway->port,
+            streaming ? "text/event-stream" : "application/json",
             (uint64_t)body_length, route_id,
             AGENT_INVOKE_INTERNAL_ENDPOINT_HEADER, selected_endpoint,
             AGENT_INVOKE_INTERNAL_ORIGIN_HEADER, selected_origin,
@@ -1419,11 +1422,11 @@ enum agent_invoke_http_result agent_invoke_parse_http_response(
     if (!have_content_length) {
         return AGENT_INVOKE_HTTP_INVALID;
     }
+    response->header_length = (size_t)(header_end - buffer);
+    response->body_length = content_length;
     if (content_length > max_body_length) {
         return AGENT_INVOKE_HTTP_TOO_LARGE;
     }
-    response->header_length = (size_t)(header_end - buffer);
-    response->body_length = content_length;
     if (content_length > SIZE_MAX - response->header_length) {
         return AGENT_INVOKE_HTTP_TOO_LARGE;
     }

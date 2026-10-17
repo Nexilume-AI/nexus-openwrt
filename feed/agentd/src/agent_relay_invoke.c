@@ -24,10 +24,12 @@
 #define RELAY_INVOKE_MAX_TRANSACTIONS 32U
 #define RELAY_INVOKE_MAX_WIRE_RESPONSE \
     (AGENT_INVOKE_MAX_HEADER_BYTES + AGENT_IPC_MAX_INVOKE_BODY)
+#define RELAY_TARGET_MAX_WIRE_RESPONSE \
+    (AGENT_INVOKE_MAX_HEADER_BYTES + AGENT_INVOKE_MAX_RELAY_RESPONSE)
 #define RELAY_INVOKE_REQUEST_RESERVE 2048U
 #define RELAY_INVOKE_INITIAL_CREDIT 65536U
 #define RELAY_INVOKE_CREDIT_BATCH 32768U
-#define RELAY_STREAM_MAX_EVENT 32768U
+#define RELAY_STREAM_MAX_EVENT AGENT_INVOKE_MAX_RELAY_RESPONSE
 #define RELAY_STREAM_MAX_BYTES AGENT_IPC_MAX_STREAM_BYTES
 #define RELAY_INVOKE_RESET_UNAVAILABLE 1U
 #define RELAY_INVOKE_RESET_PROTOCOL 3U
@@ -84,6 +86,10 @@ struct relay_invoke_slot {
     size_t backend_request_length;
     size_t backend_request_sent;
     char *stream_event_buffer;
+    uint8_t *stream_pending;
+    size_t stream_pending_length;
+    size_t stream_pending_sent;
+    bool stream_eof;
     struct agent_sse_relay stream_relay;
     uint64_t stream_bytes;
     uint32_t pending_credit;
@@ -256,6 +262,7 @@ static void clear_slot(struct relay_invoke_slot *slot)
     }
     free(slot->backend_request);
     free(slot->stream_event_buffer);
+    free(slot->stream_pending);
     memset(slot, 0, sizeof(*slot));
     slot->backend_fd = -1;
     slot->manager = manager;
@@ -566,14 +573,45 @@ static void pump_target_response(struct relay_invoke_slot *slot)
     clear_slot(slot);
 }
 
+/* Return a bounded application error through the ordinary credit-controlled
+ * response path. RESET discarded the reason and looked like a dead connection. */
+static void reject_oversized_response(struct relay_invoke_slot *slot, size_t actual)
+{
+    char body[384];
+    int length = snprintf(body, sizeof(body),
+        "{\"code\":\"RESPONSE_TOO_LARGE\",\"message\":\"Agent response exceeds Relay limit; use paginated results. Do not blindly retry a command that already executed.\","
+        "\"limit_bytes\":%u,\"response_bytes\":%zu}",
+        AGENT_INVOKE_MAX_RELAY_RESPONSE, actual);
+    int head = snprintf((char *)slot->buffer, slot->buffer_capacity,
+        "HTTP/1.1 413 Payload Too Large\r\nContent-Type: application/json\r\n"
+        "Content-Length: %d\r\nConnection: close\r\n\r\n%s", length, body);
+    if (head < 0 || (size_t)head >= slot->buffer_capacity) {
+        fail_slot(slot, 413U, "RESPONSE_TOO_LARGE", RELAY_INVOKE_RESET_PROTOCOL);
+        return;
+    }
+    slot->buffer_length = (size_t)head;
+    if (slot->backend_fd >= 0) {
+        uloop_fd_delete(&slot->backend);
+        close(slot->backend_fd);
+        slot->backend_fd = -1;
+    }
+    slot->role = RELAY_INVOKE_TARGET_RESPONDING;
+    slot->response_sent = 0U;
+    pump_target_response(slot);
+}
+
 static void finish_target(struct relay_invoke_slot *slot)
 {
-    struct agent_invoke_http_response parsed;
+    struct agent_invoke_http_response parsed = {0};
     enum agent_invoke_http_result result;
 
     result = agent_invoke_parse_http_response(
         (const char *)slot->buffer, slot->buffer_length,
-        AGENT_IPC_MAX_INVOKE_BODY, &parsed);
+        AGENT_INVOKE_MAX_RELAY_RESPONSE, &parsed);
+    if (result == AGENT_INVOKE_HTTP_TOO_LARGE) {
+        reject_oversized_response(slot, parsed.body_length);
+        return;
+    }
     if (result != AGENT_INVOKE_HTTP_OK) {
         fail_slot(slot, 502U, "local Agent returned an invalid response",
                   RELAY_INVOKE_RESET_PROTOCOL);
@@ -608,10 +646,12 @@ static bool emit_target_stream_event(
     struct relay_invoke_slot *slot = context;
 
     if (event_length > RELAY_STREAM_MAX_BYTES - slot->stream_bytes ||
-        !send_data_bytes(slot, (const uint8_t *)event, event_length)) {
+        event_length > RELAY_STREAM_MAX_EVENT + AGENT_SSE_MAX_HEADER_BYTES - slot->stream_pending_length) {
         slot->manager->stats.stream_backpressure_resets++;
         return false;
     }
+    memcpy(slot->stream_pending + slot->stream_pending_length, event, event_length);
+    slot->stream_pending_length += event_length;
     slot->stream_bytes += event_length;
     slot->manager->stats.stream_events++;
     slot->manager->stats.stream_bytes += event_length;
@@ -633,6 +673,40 @@ static void complete_target_stream(struct relay_invoke_slot *slot)
     slot->manager->stats.completed++;
     slot->manager->stats.streams_completed++;
     clear_slot(slot);
+}
+
+static void pump_target_stream(struct relay_invoke_slot *slot)
+{
+    struct agent_relay_tunnel_message message;
+    uint32_t credit;
+    while (slot->stream_pending_sent < slot->stream_pending_length) {
+        size_t chunk = slot->stream_pending_length - slot->stream_pending_sent;
+        if (!agent_peer_transport_tunnel_send_credit(slot->manager->transport,
+                slot->peer_id, slot->stream_id, &credit) &&
+            !agent_peer_listener_tunnel_send_credit(slot->manager->listener,
+                slot->peer_id, slot->stream_id, &credit)) {
+            fail_slot(slot, 502U, "Relay stream unavailable", RELAY_INVOKE_RESET_UNAVAILABLE);
+            return;
+        }
+        if (credit == 0U) {
+            uloop_fd_delete(&slot->backend);
+            return;
+        }
+        if (chunk > AGENT_RELAY_TUNNEL_MAX_DATA) chunk = AGENT_RELAY_TUNNEL_MAX_DATA;
+        if (chunk > credit) chunk = credit;
+        memset(&message, 0, sizeof(message));
+        message.type = AGENT_RELAY_TUNNEL_DATA;
+        message.data_length = chunk;
+        memcpy(message.data, slot->stream_pending + slot->stream_pending_sent, chunk);
+        if (!send_tunnel(slot, &message)) {
+            fail_slot(slot, 503U, "Relay stream queue is full", RELAY_INVOKE_RESET_BACKPRESSURE);
+            return;
+        }
+        slot->stream_pending_sent += chunk;
+    }
+    slot->stream_pending_length = slot->stream_pending_sent = 0U;
+    if (slot->stream_eof) complete_target_stream(slot);
+    else backend_events(slot, ULOOP_READ);
 }
 
 static void handle_target_stream_read(struct relay_invoke_slot *slot)
@@ -695,7 +769,8 @@ static void handle_target_stream_read(struct relay_invoke_slot *slot)
             &slot->stream_relay, destination, capacity,
             emit_target_stream_event, slot);
         if (relay_result == AGENT_SSE_RELAY_DONE) {
-            complete_target_stream(slot);
+            slot->stream_eof = true;
+            pump_target_stream(slot);
             return;
         }
         if (relay_result != AGENT_SSE_RELAY_OK) {
@@ -713,12 +788,13 @@ static void handle_target_stream_read(struct relay_invoke_slot *slot)
     if (received == 0) {
         relay_result = agent_sse_relay_finish(&slot->stream_relay);
         if (relay_result == AGENT_SSE_RELAY_DONE) {
-            complete_target_stream(slot);
+            slot->stream_eof = true;
         } else {
             fail_slot(slot, 502U, "local SSE ended inside an event",
                       RELAY_INVOKE_RESET_PROTOCOL);
         }
     }
+    if (slot->role != RELAY_INVOKE_FREE) pump_target_stream(slot);
 }
 
 static void backend_callback(struct uloop_fd *fd, unsigned int events)
@@ -768,16 +844,18 @@ static void backend_callback(struct uloop_fd *fd, unsigned int events)
     result = recv(slot->backend_fd, slot->buffer + slot->buffer_length,
                   slot->buffer_capacity - slot->buffer_length, 0);
     if (result > 0) {
-        struct agent_invoke_http_response parsed;
+        struct agent_invoke_http_response parsed = {0};
         enum agent_invoke_http_result parsed_result;
 
         slot->buffer_length += (size_t)result;
         slot->manager->stats.bytes_received += (size_t)result;
         parsed_result = agent_invoke_parse_http_response(
             (const char *)slot->buffer, slot->buffer_length,
-            AGENT_IPC_MAX_INVOKE_BODY, &parsed);
+            AGENT_INVOKE_MAX_RELAY_RESPONSE, &parsed);
         if (parsed_result == AGENT_INVOKE_HTTP_OK) finish_target(slot);
-        else if (parsed_result != AGENT_INVOKE_HTTP_INCOMPLETE) {
+        else if (parsed_result == AGENT_INVOKE_HTTP_TOO_LARGE) {
+            reject_oversized_response(slot, parsed.body_length);
+        } else if (parsed_result != AGENT_INVOKE_HTTP_INCOMPLETE) {
             fail_slot(slot, 502U, "local Agent response is invalid",
                       RELAY_INVOKE_RESET_PROTOCOL);
         }
@@ -867,7 +945,7 @@ static bool start_local_invoke(struct relay_invoke_slot *slot)
         selection.route->endpoint, &selected_tls_endpoint);
     if (selected_https) {
         now = slot->manager->now_ms();
-        if (slot->streaming || slot->open.target_agent[0] == '\0' ||
+        if (slot->open.target_agent[0] == '\0' ||
             now >= slot->deadline_ms ||
             !slot->manager->internal_gateway_enabled) {
             slot->manager->stats.internal_gateway_unavailable++;
@@ -899,7 +977,7 @@ static bool start_local_invoke(struct relay_invoke_slot *slot)
                     selection.route->endpoint, selection.route->origin,
                     slot->open.target_agent,
                     slot->manager->internal_gateway_token,
-                    gateway_timeout_ms,
+                    gateway_timeout_ms, slot->streaming,
                     (const char *)slot->buffer, slot->buffer_length,
                     slot->backend_request, request_capacity,
                     &slot->backend_request_length)
@@ -920,14 +998,15 @@ static bool start_local_invoke(struct relay_invoke_slot *slot)
     free(slot->buffer);
     slot->buffer_capacity = slot->streaming
         ? AGENT_SSE_MAX_HEADER_BYTES + 1U
-        : RELAY_INVOKE_MAX_WIRE_RESPONSE;
+        : RELAY_TARGET_MAX_WIRE_RESPONSE;
     slot->buffer = malloc(slot->buffer_capacity);
     slot->buffer_length = 0U;
     if (slot->streaming) {
         slot->stream_event_buffer = malloc(RELAY_STREAM_MAX_EVENT);
+        slot->stream_pending = malloc(RELAY_STREAM_MAX_EVENT + AGENT_SSE_MAX_HEADER_BYTES);
     }
     if (slot->buffer == NULL ||
-        (slot->streaming && slot->stream_event_buffer == NULL)) return false;
+        (slot->streaming && (slot->stream_event_buffer == NULL || slot->stream_pending == NULL))) return false;
     slot->backend_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK |
                               SOCK_CLOEXEC, 0);
     if (slot->backend_fd < 0) return false;
@@ -1437,6 +1516,11 @@ bool agent_relay_invoke_on_tunnel(
     if (slot->role == RELAY_INVOKE_TRANSIT_OPENING ||
         slot->role == RELAY_INVOKE_TRANSIT_FORWARDING) {
         handle_transit_message(slot, leg, message);
+        return true;
+    }
+    if (message->type == AGENT_RELAY_TUNNEL_WINDOW_UPDATE &&
+        slot->role == RELAY_INVOKE_TARGET_READING && slot->streaming) {
+        pump_target_stream(slot);
         return true;
     }
     if (message->type == AGENT_RELAY_TUNNEL_WINDOW_UPDATE &&

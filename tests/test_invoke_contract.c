@@ -368,7 +368,9 @@ static void test_internal_gateway_contract(void)
         "0123456789abcdef0123456789abcdeF"));
     assert(agent_invoke_backend_response_limit(false, 262144U) == 262144U);
     assert(agent_invoke_backend_response_limit(true, 262144U) ==
-           AGENT_IPC_MAX_INVOKE_BODY);
+           262144U);
+    assert(agent_invoke_backend_response_limit(true, 2097152U) ==
+           AGENT_INVOKE_MAX_RELAY_RESPONSE);
     assert(agent_invoke_backend_response_limit(true, 1024U) == 1024U);
 
     agent_invoke_dynamic_map_table_init(&table);
@@ -421,7 +423,7 @@ static void test_internal_gateway_contract(void)
     assert(agent_invoke_build_internal_http_request(
         &gateway, "0123456789abcdef0123456789abcdef",
         "https://probe.edge.test:9443/invoke",
-        "agent://tenant/probe", "agent://tenant/probe", token, 4321U,
+        "agent://tenant/probe", "agent://tenant/probe", token, 4321U, false,
         body, strlen(body), request, sizeof(request), &request_length));
     assert(request_length > strlen(body));
     assert(strstr(request,
@@ -447,22 +449,30 @@ static void test_internal_gateway_contract(void)
                    (uint64_t)strlen(body));
     assert(strstr(request, content_length) != NULL);
 
+    assert(agent_invoke_build_internal_http_request(
+        &gateway, "0123456789abcdef0123456789abcdef",
+        "https://probe.edge.test:9443/invoke",
+        "agent://tenant/probe", "agent://tenant/probe", token, 4321U, true,
+        body, strlen(body), request, sizeof(request), &request_length));
+    assert(strstr(request, "Accept: text/event-stream\r\n") != NULL);
+    assert(strstr(request, "X-Nexus-Selected-Origin: agent://tenant/probe\r\n") != NULL);
+
     assert(!agent_invoke_build_internal_http_request(
         &gateway, "0123456789abcdef0123456789abcdef",
         "https://probe.edge.test:9443/invoke",
-        "agent://tenant/probe", "", token, 4321U,
+        "agent://tenant/probe", "", token, 4321U, false,
         body, strlen(body), request,
         sizeof(request), &request_length));
 
     assert(!agent_invoke_build_internal_http_request(
         &gateway, "0123456789abcdef0123456789abcdef",
         "http://192.168.10.2:9443/invoke", "agent://tenant/probe",
-        "agent://tenant/probe", token, 4321U, body, strlen(body), request,
+        "agent://tenant/probe", token, 4321U, false, body, strlen(body), request,
         sizeof(request), &request_length));
     assert(!agent_invoke_build_internal_http_request(
         &gateway, "0123456789abcdef0123456789abcdef",
         "https://probe.edge.test:9443/invoke", "agent://tenant/probe\r\nX: 1",
-        "", token, 4321U, body, strlen(body), request, sizeof(request),
+        "", token, 4321U, false, body, strlen(body), request, sizeof(request),
         &request_length));
 }
 

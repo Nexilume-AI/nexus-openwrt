@@ -5020,6 +5020,7 @@ static void internal_invoke_handler(
         state->connection = connection;
         state->invoke = true;
         state->internal_invoke = true;
+        state->stream = accepts_event_stream(connection);
         state->operation = GATEWAY_OPERATION_INTERNAL_INVOKE;
         state->ipc_fd = -1;
         state->backend_fd = -1;
@@ -5042,6 +5043,10 @@ static void internal_invoke_handler(
         if (!config.invoke_enabled) {
             reject_request(connection, 404, "INVOKE_DISABLED",
                            "Agent invocation is disabled");
+            return;
+        }
+        if (state->stream && !config.stream_enabled) {
+            reject_request(connection, 406, "STREAM_DISABLED", "streaming is disabled");
             return;
         }
         if (!agent_rate_limiter_allow(&runtime.rate_limiter,

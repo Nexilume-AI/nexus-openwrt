@@ -32,6 +32,7 @@
     "clientDns": "server.nexus.example",
     "maxInflight": 64,
     "maxBodyBytes": 65536,
+    "maxResponseBytes": 1048576,
     "timeoutMs": 30000,
     "tls": {
       "key": "./tls/relay-cloud.key",

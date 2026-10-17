@@ -9,6 +9,8 @@
 #define AGENT_INVOKE_PATH_LEN 512U
 #define AGENT_INVOKE_CONTENT_TYPE_LEN 128U
 #define AGENT_INVOKE_MAX_HEADER_BYTES 8192U
+/* HTTP responses sent over Relay frames do not traverse the fixed IPC reply. */
+#define AGENT_INVOKE_MAX_RELAY_RESPONSE 1048576U
 #define AGENT_INVOKE_REMOTE_MAP_LEN 256U
 #define AGENT_INVOKE_DYNAMIC_MAP_CAPACITY 64U
 #define AGENT_INVOKE_ROUTE_ID_LEN 65U
@@ -262,6 +264,7 @@ bool agent_invoke_build_internal_http_request(
     const char *target_agent,
     const char *token,
     uint32_t timeout_ms,
+    bool streaming,
     const char *body,
     size_t body_length,
     char *output,

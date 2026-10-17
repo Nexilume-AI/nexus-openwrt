@@ -204,6 +204,11 @@ class CloudInvokeMux {
     this.routerId = options.sourceRouterId || "nexus-cloud";
     this.maxInflight = options.maxInflight || 64;
     this.maxBodyBytes = options.maxBodyBytes || 65536;
+    this.maxResponseBytes = options.maxResponseBytes ?? 1048576;
+    if (!Number.isSafeInteger(this.maxResponseBytes) ||
+        this.maxResponseBytes < 1024 || this.maxResponseBytes > 1048576) {
+      throw new Error("invalid Relay response body bound");
+    }
     this.maxResponseHeaderBytes = options.maxResponseHeaderBytes ??
       DEFAULT_MAX_RESPONSE_HEADER_BYTES;
     if (!Number.isSafeInteger(this.maxResponseHeaderBytes) ||
@@ -218,7 +223,7 @@ class CloudInvokeMux {
     }
   }
 
-  invoke(metadata, body) {
+  invoke(metadata, body, sink = null) {
     if (!Buffer.isBuffer(body) || body.length < 1 || body.length > this.maxBodyBytes ||
         this.calls.size >= this.maxInflight) {
       return Promise.reject(new Error("cloud invocation capacity exceeded"));
@@ -229,10 +234,17 @@ class CloudInvokeMux {
         streamId, metadata, body, offset: 0, credit: 0, nextSequence: 2n,
         response: [], responseBytes: 0, accepted: false, responseStarted: false,
         rawHeaderLength: null, resolve, reject, timer: null,
+        sink, onClose: null, onDrain: null, pendingCredit: 0, durationTimer: null,
       };
       call.timer = setTimeout(() => this.fail(call, "Relay invocation timed out", true), this.timeoutMs);
       call.timer.unref();
       this.calls.set(streamId, call);
+      if (sink) {
+        call.onClose = () => this.fail(call, "Relay client disconnected", true);
+        sink.once("close", call.onClose);
+        call.durationTimer = setTimeout(() => this.fail(call, "Relay stream duration exceeded", true), 300000);
+        call.durationTimer.unref();
+      }
       try {
         this.core.receive(this.routerId, encodeOpen({
           streamId,
@@ -244,7 +256,7 @@ class CloudInvokeMux {
           tenant: metadata.tenant,
           region: "*",
           hopLimit: 8,
-          streaming: false,
+          streaming: Boolean(sink),
           maxCostMicrounits: Number.MAX_SAFE_INTEGER,
           maxLatencyMs: this.timeoutMs,
           forwardingAssertion: metadata.forwardingAssertion,
@@ -283,11 +295,36 @@ class CloudInvokeMux {
           throw new Error("invalid Relay response framing");
         }
         call.responseStarted = true;
+        if (call.sink) {
+          call.sink.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no", Connection: "close" });
+          call.sink.flushHeaders();
+        }
       } else if (message.type === TYPE.DATA) {
         call.responseBytes += message.data.length;
-        const responseBound = call.responseStarted ? this.maxBodyBytes :
-          this.maxBodyBytes + this.maxResponseHeaderBytes;
+        const responseBound = call.responseStarted ? this.maxResponseBytes :
+          this.maxResponseBytes + this.maxResponseHeaderBytes;
         if (call.responseBytes > responseBound) throw new Error("Relay response exceeds bound");
+        if (call.sink) {
+          if (!call.responseStarted) throw new Error("Relay stream data before response start");
+          clearTimeout(call.timer);
+          call.timer = setTimeout(() => this.fail(call, "Relay stream idle timeout", true), this.timeoutMs);
+          call.timer.unref();
+          call.pendingCredit += message.data.length;
+          const grant = () => {
+            call.onDrain = null;
+            if (!this.calls.has(call.streamId)) return;
+            const credit = call.pendingCredit;
+            call.pendingCredit = 0;
+            try { this.core.receive(this.routerId, encodeWindowUpdate(call.streamId, call.nextSequence++, credit)); }
+            catch (error) { this.fail(call, error.message, true); }
+          };
+          const writable = call.sink.write(message.data);
+          if (!call.onDrain) {
+            if (writable) grant();
+            else { call.onDrain = grant; call.sink.once("drain", grant); }
+          }
+          return true;
+        }
         call.response.push(Buffer.from(message.data));
         if (!call.responseStarted && call.rawHeaderLength === null) {
           const buffered = Buffer.concat(call.response, call.responseBytes);
@@ -304,16 +341,27 @@ class CloudInvokeMux {
         this.core.receive(this.routerId,
           encodeWindowUpdate(call.streamId, call.nextSequence++, message.data.length));
       } else if (message.type === TYPE.END) {
+        if (call.sink) {
+          if (!call.responseStarted) throw new Error("Relay stream ended before response start");
+          this.finish(call);
+          call.sink.end();
+          call.resolve({ statusCode: 200, contentType: "text/event-stream", body: Buffer.alloc(0) });
+          return true;
+        }
         const body = Buffer.concat(call.response);
         const result = call.responseStarted ? {
           statusCode: 200,
           contentType: "application/json",
           body,
         } : parseRawHttpResponse(
-          body, this.maxResponseHeaderBytes, this.maxBodyBytes);
+          body, this.maxResponseHeaderBytes, this.maxResponseBytes);
         this.finish(call);
         call.resolve(result);
       } else if (message.type === TYPE.RESET) {
+        if (call.sink && call.responseStarted) {
+          this.fail(call, `Relay stream reset: ${message.resetCode}`, false);
+          return true;
+        }
         const statusCode = message.resetCode === RESET.TARGET_UNAVAILABLE ? 503 :
           message.resetCode === RESET.AUTHORIZATION ? 403 : 502;
         this.finish(call);
@@ -354,6 +402,9 @@ class CloudInvokeMux {
 
   finish(call) {
     clearTimeout(call.timer);
+    clearTimeout(call.durationTimer);
+    if (call.sink && call.onClose) call.sink.removeListener("close", call.onClose);
+    if (call.sink && call.onDrain) call.sink.removeListener("drain", call.onDrain);
     this.calls.delete(call.streamId);
   }
 
@@ -426,11 +477,13 @@ function createCloudInvokeServer(core, config, capture = () => {}) {
         const authorization = header(request, "authorization", 4096);
         if (!authorization.startsWith("Bearer ")) throw new Error("missing Relay JWT");
         verifier.verify(authorization.slice(7), metadata, body);
-        const result = await mux.invoke(metadata, body);
+        const streaming = request.headers.accept === "text/event-stream";
+        const result = await mux.invoke(metadata, body, streaming ? response : null);
         capture("cloud-invoke-completed", {
           target_router_id: metadata.targetRouterId, task_id: metadata.taskId,
           status: result.statusCode, request_bytes: body.length, response_bytes: result.body.length,
         });
+        if (response.headersSent) return;
         response.writeHead(result.statusCode, {
           "Content-Type": result.contentType || "application/json",
           "Content-Length": result.body.length,
@@ -440,6 +493,7 @@ function createCloudInvokeServer(core, config, capture = () => {}) {
         response.end(result.body);
       } catch (error) {
         capture("cloud-invoke-rejected", { error: error.message });
+        if (response.headersSent) { response.destroy(error); return; }
         const status = /JWT|certificate|authorization|source router/i.test(error.message) ? 401 : 502;
         const body = Buffer.from(JSON.stringify({ error: status === 401 ? "unauthorized" : "relay_unavailable" }));
         response.writeHead(status, { "Content-Type": "application/json", "Content-Length": body.length, Connection: "close" });

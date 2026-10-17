@@ -6,11 +6,12 @@ const fs = require("fs");
 const https = require("https");
 const os = require("os");
 const path = require("path");
+const { EventEmitter } = require("events");
 const { spawnSync } = require("child_process");
 const { RelayCore } = require("../relay/relay-core");
 const { CloudInvokeMux, RelayJwtVerifier, createCloudInvokeServer } = require("../relay/cloud-invoke");
 const {
-  TYPE, decodeFrame, encodeAccept, encodeData, encodeEnd, encodeResponseStart,
+  TYPE, RESET, decodeFrame, encodeAccept, encodeData, encodeEnd, encodeResponseStart, encodeReset,
 } = require("../relay/relay-tunnel");
 
 function invocationMetadata() {
@@ -140,6 +141,69 @@ async function testCloudMuxRejectsMalformedRawHttp() {
   await assert.rejects(
     () => invokeRawResponse([oversizedHeader], { maxResponseHeaderBytes: 64 }),
     /header exceeds bound/);
+}
+
+async function testIndependentLargeResponseBound() {
+  for (const size of [16385, 65537, 1048576, 1048577]) {
+    const body = Buffer.alloc(size, 120);
+    const wire = Buffer.concat([Buffer.from(
+      `HTTP/1.1 200 OK\r\nContent-Length: ${size}\r\nContent-Type: application/json\r\n\r\n`), body]);
+    const chunks = [];
+    for (let offset = 0; offset < wire.length; offset += 2048) chunks.push(wire.subarray(offset, offset + 2048));
+    if (size <= 1048576) {
+      const result = await invokeRawResponse(chunks, { maxBodyBytes: 1024, maxResponseBytes: 1048576 });
+      assert.deepStrictEqual(result.body, body);
+    } else {
+      await assert.rejects(() => invokeRawResponse(chunks, { maxBodyBytes: 1024, maxResponseBytes: 1048576 }), /bound/);
+    }
+  }
+}
+
+async function testStreamingDeliveryAndDisconnect() {
+  for (const disconnect of [false, true, "reset"]) {
+    const core = new RelayCore({ maxNodes: 4, maxPairs: 4, initialWindow: 4096 });
+    const sink = new EventEmitter();
+    const received = [];
+    let ended = false, reset = false, streamId, sequence = 2n, finish;
+    sink.writeHead = (status, headers) => { assert.strictEqual(status, 200); assert.strictEqual(headers["Content-Type"], "text/event-stream"); };
+    sink.flushHeaders = () => {};
+    sink.write = (data) => { received.push(data.toString()); return false; };
+    sink.end = () => { ended = true; };
+    core.registerNode("router-nat-a", frame => {
+      const m = decodeFrame(frame);streamId = m.streamId;
+      if (m.type === TYPE.OPEN) {
+        assert.strictEqual(m.streaming, true);
+        setImmediate(() => core.receive("router-nat-a", encodeAccept(streamId, 200, 4096)));
+      } else if (m.type === TYPE.END) {
+        setImmediate(() => {
+          core.receive("router-nat-a", encodeResponseStart(streamId, sequence++));
+          core.receive("router-nat-a", encodeData(streamId, sequence++, Buffer.from('event: progress\ndata: {"progress":0}\n\n')));
+          finish();
+        });
+      } else if (m.type === TYPE.RESET) reset = true;
+      return true;
+    });
+    const mux = new CloudInvokeMux(core, { timeoutMs: 1000 });
+    const first = new Promise(resolve => { finish = resolve; });
+    const result = mux.invoke(invocationMetadata(), Buffer.from('{}'), sink);
+    const rejected = disconnect ? assert.rejects(result, disconnect === "reset" ? /stream reset/ : /disconnected/) : null;
+    await first;
+    assert.strictEqual(received.length, 1);
+    assert.strictEqual(ended, false); // Delivered while invocation is still open.
+    if (disconnect === "reset") {
+      core.receive("router-nat-a", encodeReset(streamId, sequence++, RESET.PROTOCOL));
+      await rejected;
+      assert.strictEqual(sink.listenerCount("drain"), 0);
+    } else if (disconnect) {
+      sink.emit("close");await rejected;assert(reset);
+    } else {
+      sink.emit("drain");
+      core.receive("router-nat-a", encodeData(streamId, sequence++, Buffer.from('event: result\ndata: {}\n\n')));
+      core.receive("router-nat-a", encodeEnd(streamId, sequence++));
+      await result;assert(ended);assert.strictEqual(received.length, 2);
+    }
+    assert.strictEqual(mux.calls.size, 0);mux.close();
+  }
 }
 
 function segment(value) {
@@ -347,6 +411,8 @@ testRelayJwtBoundary();
 testCloudMuxResponseStartCompatibility()
   .then(() => testCloudMuxRawHttpRoundTrip())
   .then(() => testCloudMuxRejectsMalformedRawHttp())
+  .then(() => testIndependentLargeResponseBound())
+  .then(() => testStreamingDeliveryAndDisconnect())
   .then(() => testCloudHttpsSecurityBoundary()).then(() => {
   process.stdout.write("relay cloud invoke tests passed\n");
 }).catch((error) => {
