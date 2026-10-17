@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.0-beta.2 — 2026-10-17
+
+- Support bounded large Relay responses and streaming credit without truncating MCP results.
+- Align Gateway, agentd and adapter invocation contracts; retain configured smaller limits.
+- Increment affected package revisions so existing installations can upgrade explicitly.
+- Target remains OpenWrt 25.12.4 x86/64 with signed Router, Relay and Seed profiles.
+
 ## v0.1.0-beta.1 — 2026-10-07
 
 - Signed APK feed for OpenWrt 25.12.4 x86/64 with Router, Relay and Seed installation profiles.
