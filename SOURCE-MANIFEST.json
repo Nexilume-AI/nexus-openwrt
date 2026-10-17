@@ -401,7 +401,7 @@
     "tests/test_relay_cloud_invoke.js": "bcb5258d67efe662429c9d22f3bc3fb54900ac2850a38732dd2f8a855def72b4",
     "tests/test_relay_federation_http2.js": "1baea1d519fa8a273e9d7b9470bc5d46006405323b1ff0f55439e88826c31e21",
     "tests/test_relay_federation.js": "5ba252e8b552cb5ea23cbf34bbc45668d347af28adb97693c231a7f6da0de1f2",
-    "tests/test_relay_https_gateway_contract.py": "f2687db2664ab38bd7cafcee917730aa9bec6b746ef8f959ea5f1294fbc85db6",
+    "tests/test_relay_https_gateway_contract.py": "ef7b076cc33eada2a4e68fa6d9f8df6b7349598425052e3192ee87169cb8ae91",
     "tests/test_relay_response_credit.c": "3a5292acd475cfb1c1e07bafda3c4242f6ba6c29b05e420a84e12879af54aef4",
     "tests/test_replay_cache.c": "1764d798f152316550891d6206201445726db8917daeeaa6022b740cd1a30e53",
     "tests/test_role_runtime_recovery.py": "6d2bd09e9d49ea3b040cb441fb83e5c62594dd8403f6f30656f98678a5050227",

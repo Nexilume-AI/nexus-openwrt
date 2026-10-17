@@ -129,10 +129,11 @@ require("-Z internal_invoke_generation" in gateway and
 require("state->effective_max_backend_response_bytes" in gateway and
         "agent_invoke_backend_response_limit(" in gateway and
         "state->effective_max_backend_response_bytes," in gateway,
-        "internal backend parser must use the effective 16 KiB bound")
-require("AGENT_IPC_MAX_INVOKE_BODY" in invoke and
-        "agent_invoke_backend_response_limit(true, 262144U)" in invoke_test,
-        "the internal 16 KiB response clamp needs executable coverage")
+        "internal backend parser must use the effective Relay response bound")
+require("AGENT_INVOKE_MAX_RELAY_RESPONSE" in invoke and
+        "agent_invoke_backend_response_limit(true, 2097152U)" in invoke_test and
+        "agent_invoke_backend_response_limit(true, 1024U) == 1024U" in invoke_test,
+        "the 1 MiB Relay ceiling and stricter configured limits need executable coverage")
 adapter_release = re.search(r"^PKG_RELEASE:=(\d+)$", adapter_make, re.MULTILINE)
 require(adapter_release is not None and int(adapter_release.group(1)) >= 8 and
         "../common/agent_ipc_protocol.h" in adapter_make,
