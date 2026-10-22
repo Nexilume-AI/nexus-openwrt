@@ -29,3 +29,11 @@ Auto prefers Direct IPv6 when the public TLS descriptor is healthy. Relay uses a
 Check pairing, Cloud Relay and Agent synchronization on the Nexus Cloud page, then invoke a synchronized capability from Console. A saved form or reachable local LuCI page does not establish this result.
 
 Quick Setup's **Open Mesh Directory URLs** and `/v1/open-mesh/assignment` from Router Roles belong to the separate self-hosted path. Never put a Cloud URL or Cloud Relay tunnel URL there, or change self-hosted roles to repair Cloud pairing.
+
+## Large Agent manifests
+
+Connector package release 46 parses the bounded manifest file directly. This
+allows a combined tool manifest larger than Linux's 128 KiB single-argument
+limit to synchronize without an `Argument list too long` error. The existing
+1 MiB file-size limit and regular-file/symlink checks still apply. Upgrade the
+connector package when many Agents or detailed tool schemas fail to synchronize.

@@ -133,8 +133,9 @@ extract_cloud_manifests() {
 	[ -e "$MANIFEST_SNAPSHOT" ] || return 0
 	[ -f "$MANIFEST_SNAPSHOT" ] && [ ! -L "$MANIFEST_SNAPSHOT" ] || return 1
 	[ "$(wc -c <"$MANIFEST_SNAPSHOT" 2>/dev/null)" -le 1048576 ] || return 1
-	content="$(cat "$MANIFEST_SNAPSHOT")"
-	json_load "$content" || return 1
+	# A valid manifest may exceed Linux MAX_ARG_STRLEN (128 KiB). Parse the
+	# bounded file directly instead of passing the complete JSON in argv.
+	json_load_file "$MANIFEST_SNAPSHOT" || return 1
 	json_select manifests || return 1
 	json_get_keys keys
 	for key in $keys; do

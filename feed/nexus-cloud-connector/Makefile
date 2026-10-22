@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=nexus-cloud-connector
 PKG_VERSION:=1.1.0
-PKG_RELEASE:=45
+PKG_RELEASE:=46
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team
 

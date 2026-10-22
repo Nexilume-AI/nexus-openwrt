@@ -29,3 +29,10 @@ Auto 只有在公网 TLS 描述符健康时优先 Direct IPv6；Relay 使用主�
 在 Nexus Cloud 页确认配对、Cloud Relay 和 Agent 同步状态，并在 Console 验证已同步能力的实际调用。保存成功或本地 LuCI 可访问都不能替代这一步。
 
 Quick Setup 的 **Open Mesh Directory URLs** 以及 Router Roles 页面给出的 `/v1/open-mesh/assignment` 是另一套自托管连接流程。不要把 Cloud URL 或 Cloud Relay 隧道 URL 填进该字段，也不要用切换自托管角色来修复 Cloud 配对失败。
+
+## 较大的 Agent 清单
+
+Connector 包 release 46 直接解析有大小限制的清单文件，避免多个 Agent 或详细
+工具 Schema 合并后超过 Linux 单参数 128 KiB 限制而出现 `Argument list too long`。
+原有 1 MiB 文件上限、普通文件检查和符号链接检查继续生效。遇到此类同步失败时，
+请升级 Connector 包。
