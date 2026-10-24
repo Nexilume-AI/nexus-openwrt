@@ -53,6 +53,7 @@ struct peer_transport_slot {
     char relay_session_ticket[AGENT_PEER_RELAY_TICKET_LEN];
     bool relay;
     bool failure_notified;
+    bool relay_ticket_waiting;
     struct agent_peer_transport_endpoint endpoint;
     bool eligible;
     enum transport_phase phase;
@@ -335,6 +336,9 @@ static void slot_fail(struct peer_transport_slot *slot, const char *message)
     slot_cleanup_io(slot);
     agent_peer_session_transport_down(&slot->session, now);
     slot->phase = TRANSPORT_BACKOFF;
+    /* Relay tickets are bound to one HTTP/2 session. Never reconnect with a
+     * ticket from a failed session; the Directory supplies a fresh one. */
+    if (slot->relay) slot->relay_ticket_waiting = true;
     if ((was_up || (slot->relay && (!slot->failure_notified || retry_mesh_path))) &&
         slot->manager->config.session_handler != NULL) {
         if (slot->relay) slot->failure_notified = true;
@@ -1333,14 +1337,13 @@ static void manager_timer_callback(struct uloop_timeout *timeout)
         if (!slot->eligible) {
             continue;
         }
+        if (slot->phase == TRANSPORT_BACKOFF && slot->relay_ticket_waiting) {
+            continue;
+        }
         if (agent_peer_session_tick(&slot->session, now)) {
             if (slot->session.state == AGENT_PEER_SESSION_BACKOFF) {
-                slot->failures++;
-                set_error(slot->last_error, sizeof(slot->last_error),
-                          "peer OPEN or heartbeat timeout");
-                slot_cleanup_io(slot);
-                slot->phase = TRANSPORT_BACKOFF;
-                update_peer_state(slot, AGENT_PEER_STATE_DOWN);
+                /* Timeout must notify the Directory just like socket loss. */
+                slot_fail(slot, "peer OPEN or heartbeat timeout");
             } else if (slot->session.state == AGENT_PEER_SESSION_CONNECTING) {
                 slot->phase = TRANSPORT_TCP_CONNECTING;
                 if (!start_connect(slot)) {
@@ -1747,6 +1750,11 @@ bool agent_peer_transport_set_relay_ticket(
             memcpy(slot->relay_session_ticket, previous_ticket,
                    sizeof(slot->relay_session_ticket));
             return false;
+        }
+        if (slot->phase == TRANSPORT_BACKOFF) {
+            slot->relay_ticket_waiting = false;
+            slot->failure_notified = false;
+            slot->session.next_action_ms = manager->now_ms();
         }
         return true;
     }

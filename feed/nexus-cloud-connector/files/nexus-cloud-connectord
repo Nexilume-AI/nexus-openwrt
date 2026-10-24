@@ -48,7 +48,8 @@ log() {
 safe_line() {
 	case "$1" in
 		*"$TAB"*|*"$CLOUD_STATUS_SEPARATOR"*|*"
-"*|*""*) return 1 ;;
+"*|*"
+"*) return 1 ;;
 	esac
 	return 0
 }
@@ -98,7 +99,8 @@ safe_path() {
 	case "$1" in *'\'*) return 1 ;; esac
 	case "$1" in
 		*..*|*'"'*|*"
-"*|*""*) return 1 ;;
+"*|*"
+"*) return 1 ;;
 	esac
 	return 0
 }
@@ -503,7 +505,8 @@ load_configuration() {
 		case "$cloud_url" in https://*/*) return 1 ;; esac
 		case "$cloud_url" in *'"'*|*'\'*) return 1 ;; esac
 		case "$cloud_url" in *" "*|*"	"*|*"
-"*|*""*) return 1 ;; esac
+"*|*"
+"*) return 1 ;; esac
 	done
 	case "$sync_interval:$recovery_interval:$lease_seconds:$connect_timeout:$request_timeout:$public_ingress_port" in
 		*[!0-9:]*) return 1 ;;
@@ -1440,11 +1443,12 @@ enroll_node() {
 		json_add_boolean caller_mobile_v1 1
 		json_add_boolean durable_recovery_v1 1
 	else
-		json_add_boolean runtime_context_v1 0
-		json_add_boolean invoke_interactions_v1 0
-		json_add_boolean mcp_stream_v1 0
-		json_add_boolean mcp_tasks_v1 0
-		json_add_boolean caller_mobile_v1 0
+		# Relay carries signed Run context and streaming Mobile tasks too.
+		json_add_boolean runtime_context_v1 1
+		json_add_boolean invoke_interactions_v1 1
+		json_add_boolean mcp_stream_v1 1
+		json_add_boolean mcp_tasks_v1 1
+		json_add_boolean caller_mobile_v1 1
 		json_add_boolean durable_recovery_v1 0
 	fi
 	json_close_object
@@ -1481,7 +1485,8 @@ enroll_node() {
 	edge_base_url="${edge_base_url%/}"
 	case "$edge_base_url" in https://*/*) return 1 ;; https://*) ;; *) return 1 ;; esac
 	case "$edge_base_url" in *'"'*|*'\'*|*" "*|*"	"*|*"
-"*|*""*) return 1 ;; esac
+"*|*"
+"*) return 1 ;; esac
 	case "$device_token" in edge_[A-Za-z0-9_-]*) ;; *) return 1 ;; esac
 	safe_line "$node_id" || return 1
 	valid_cloud_tenant_id "$tenant_id" || return 1
@@ -1906,11 +1911,12 @@ renew_presence() {
 		json_add_boolean caller_mobile_v1 1
 		json_add_boolean durable_recovery_v1 1
 	else
-		json_add_boolean runtime_context_v1 0
-		json_add_boolean invoke_interactions_v1 0
-		json_add_boolean mcp_stream_v1 0
-		json_add_boolean mcp_tasks_v1 0
-		json_add_boolean caller_mobile_v1 0
+		# Relay carries signed Run context and streaming Mobile tasks too.
+		json_add_boolean runtime_context_v1 1
+		json_add_boolean invoke_interactions_v1 1
+		json_add_boolean mcp_stream_v1 1
+		json_add_boolean mcp_tasks_v1 1
+		json_add_boolean caller_mobile_v1 1
 		json_add_boolean durable_recovery_v1 0
 	fi
 	json_close_object

@@ -1096,7 +1096,7 @@ enum agent_ipc_result agent_ipc_encode_stream_end(
 )
 {
     if (end == NULL || frame == NULL || frame_length == NULL ||
-        end->request_id == 0U || end->total_bytes > AGENT_IPC_MAX_STREAM_BYTES ||
+        end->request_id == 0U ||
         capacity < AGENT_IPC_HEADER_SIZE + STREAM_END_PAYLOAD_SIZE) {
         return AGENT_IPC_INVALID;
     }
@@ -1123,7 +1123,7 @@ enum agent_ipc_result agent_ipc_decode_stream_end(
     }
     end->request_id = header.request_id;
     end->total_bytes = read_u64(frame + AGENT_IPC_HEADER_SIZE);
-    if (end->request_id == 0U || end->total_bytes > AGENT_IPC_MAX_STREAM_BYTES) {
+    if (end->request_id == 0U) {
         return AGENT_IPC_INVALID;
     }
     return AGENT_IPC_OK;

@@ -38,7 +38,7 @@ acl = json.loads(
 )
 
 assert "PKG_NAME:=nexus-cloud-connector" in makefile
-assert "PKG_RELEASE:=46" in makefile
+assert "PKG_RELEASE:=47" in makefile
 for dependency in ("+agentd", "+agent-gw", "+agent-adapter", "+curl", "+jshn", "+openssl-util"):
     assert dependency in makefile
 assert "option enabled '0'" in config
@@ -323,3 +323,7 @@ assert "command -v stat" in tls_check
 assert "-rw-------" in tls_check
 
 print("Nexus Cloud connector contract passed")
+
+# Modern Relay supports the same signed context/mobile stream as Direct IPv6.
+for capability in ("runtime_context_v1", "invoke_interactions_v1", "mcp_stream_v1", "mcp_tasks_v1", "caller_mobile_v1"):
+    assert f"json_add_boolean {capability} 0" not in daemon

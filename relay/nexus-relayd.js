@@ -140,7 +140,7 @@ function loadConfig(filename) {
   config.capture = path.resolve(base, config.capture);
   if (config.cloudIngress === undefined) config.cloudIngress = { enabled: false };
   strictKeys(config.cloudIngress, ["enabled", "listen", "port", "relayId",
-    "sourceRouterId", "clientDns", "maxInflight", "maxBodyBytes", "maxResponseBytes", "timeoutMs",
+    "sourceRouterId", "clientDns", "maxInflight", "maxBodyBytes", "maxResponseBytes", "timeoutMs", "maxStreamDurationMs",
     "tls", "jwt"], "cloudIngress");
   if (typeof config.cloudIngress.enabled !== "boolean") {
     throw new Error("invalid cloudIngress enabled flag");
@@ -165,6 +165,8 @@ function loadConfig(filename) {
       "cloudIngress maxResponseBytes");
     cloud.timeoutMs = boundedInteger(cloud.timeoutMs || 30000, 1000, 120000,
       "cloudIngress timeoutMs");
+    cloud.maxStreamDurationMs = boundedInteger(cloud.maxStreamDurationMs ?? 0,
+      0, 3600000, "cloudIngress maxStreamDurationMs");
     cloud.jwt.maxReplay = boundedInteger(cloud.jwt.maxReplay || 4096, 1, 65536,
       "cloudIngress jwt maxReplay");
     cloud.jwt.clockSkewSeconds = boundedInteger(cloud.jwt.clockSkewSeconds === undefined ? 5 : cloud.jwt.clockSkewSeconds,

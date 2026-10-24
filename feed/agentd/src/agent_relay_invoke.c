@@ -30,7 +30,6 @@
 #define RELAY_INVOKE_INITIAL_CREDIT 65536U
 #define RELAY_INVOKE_CREDIT_BATCH 32768U
 #define RELAY_STREAM_MAX_EVENT AGENT_INVOKE_MAX_RELAY_RESPONSE
-#define RELAY_STREAM_MAX_BYTES AGENT_IPC_MAX_STREAM_BYTES
 #define RELAY_INVOKE_RESET_UNAVAILABLE 1U
 #define RELAY_INVOKE_RESET_PROTOCOL 3U
 #define RELAY_INVOKE_RESET_BACKPRESSURE 4U
@@ -645,8 +644,7 @@ static bool emit_target_stream_event(
 {
     struct relay_invoke_slot *slot = context;
 
-    if (event_length > RELAY_STREAM_MAX_BYTES - slot->stream_bytes ||
-        event_length > RELAY_STREAM_MAX_EVENT + AGENT_SSE_MAX_HEADER_BYTES - slot->stream_pending_length) {
+    if (event_length > RELAY_STREAM_MAX_EVENT + AGENT_SSE_MAX_HEADER_BYTES - slot->stream_pending_length) {
         slot->manager->stats.stream_backpressure_resets++;
         return false;
     }
@@ -1559,8 +1557,6 @@ bool agent_relay_invoke_on_tunnel(
     if (message->type == AGENT_RELAY_TUNNEL_DATA) {
         if (slot->role == RELAY_INVOKE_SOURCE && slot->streaming) {
             if (!slot->response_started ||
-                message->data_length >
-                    RELAY_STREAM_MAX_BYTES - slot->stream_bytes ||
                 !agent_ipc_client_stream_data(
                     slot->client, slot->request_id,
                     message->data, message->data_length) ||

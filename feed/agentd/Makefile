@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=agentd
 PKG_VERSION:=3.1.0
-PKG_RELEASE:=34
+PKG_RELEASE:=36
 
 PKG_LICENSE:=LicenseRef-Nexus-Additional-Terms-1.0
 PKG_MAINTAINER:=Nexus OpenWrt Team

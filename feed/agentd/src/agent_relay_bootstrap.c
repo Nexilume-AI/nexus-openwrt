@@ -190,6 +190,12 @@ static void schedule_retry(
     uint64_t now = bootstrap->now_ms();
     uint32_t delay = bootstrap->config.poll_ms;
 
+    /* A disconnected Relay cannot use its old session ticket. Retry failed
+     * Directory requests promptly, with a bounded rate, until recovery. */
+    if (bootstrap->failed_relay_id[0] != '\0' && delay > 2000U) {
+        delay = 2000U;
+    }
+
     cleanup_io(bootstrap);
     bootstrap->phase = RELAY_BOOTSTRAP_IDLE;
     increment(&bootstrap->failures);

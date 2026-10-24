@@ -34,6 +34,7 @@
     "maxBodyBytes": 65536,
     "maxResponseBytes": 1048576,
     "timeoutMs": 30000,
+    "maxStreamDurationMs": 0,
     "tls": {
       "key": "./tls/relay-cloud.key",
       "cert": "./tls/relay-cloud.pem",

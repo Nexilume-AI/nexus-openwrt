@@ -636,6 +636,13 @@ int main(void)
     test_candidates_round_trip();
     test_invoke_round_trip();
     test_stream_round_trip();
+    {
+        struct agent_ipc_stream_end sent = {.request_id = 1, .total_bytes = UINT64_C(8589934592)}, received;
+        uint8_t frame[128]; size_t length;
+        assert(agent_ipc_encode_stream_end(&sent, frame, sizeof(frame), &length) == AGENT_IPC_OK);
+        assert(agent_ipc_decode_stream_end(frame, length, &received) == AGENT_IPC_OK);
+        assert(received.total_bytes == sent.total_bytes);
+    }
     test_registration_round_trip();
     test_error_and_malformed_frames();
     puts("agent IPC protocol tests passed");

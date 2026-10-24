@@ -216,6 +216,14 @@ class CloudInvokeMux {
       throw new Error("invalid Relay response header bound");
     }
     this.timeoutMs = options.timeoutMs || 30000;
+    // Zero means no total stream lifetime. Activity, backpressure, explicit
+    // cancellation and Agent task deadlines govern long-lived streams.
+    this.maxStreamDurationMs = options.maxStreamDurationMs ?? 0;
+    if (!Number.isSafeInteger(this.maxStreamDurationMs) ||
+        this.maxStreamDurationMs < 0 || this.maxStreamDurationMs > 3600000 ||
+        (this.maxStreamDurationMs > 0 && this.maxStreamDurationMs < 1000)) {
+      throw new Error("invalid Relay stream duration bound");
+    }
     this.nextStreamId = 1;
     this.calls = new Map();
     if (!core.registerNode(this.routerId, (frame) => this.receive(frame))) {
@@ -242,8 +250,8 @@ class CloudInvokeMux {
       if (sink) {
         call.onClose = () => this.fail(call, "Relay client disconnected", true);
         sink.once("close", call.onClose);
-        call.durationTimer = setTimeout(() => this.fail(call, "Relay stream duration exceeded", true), 300000);
-        call.durationTimer.unref();
+        if (this.maxStreamDurationMs > 0) call.durationTimer = setTimeout(() => this.fail(call, "Relay stream duration exceeded", true), this.maxStreamDurationMs);
+        call.durationTimer?.unref();
       }
       try {
         this.core.receive(this.routerId, encodeOpen({
@@ -300,10 +308,10 @@ class CloudInvokeMux {
           call.sink.flushHeaders();
         }
       } else if (message.type === TYPE.DATA) {
-        call.responseBytes += message.data.length;
+        call.responseBytes = Math.min(Number.MAX_SAFE_INTEGER, call.responseBytes + message.data.length);
         const responseBound = call.responseStarted ? this.maxResponseBytes :
           this.maxResponseBytes + this.maxResponseHeaderBytes;
-        if (call.responseBytes > responseBound) throw new Error("Relay response exceeds bound");
+        if (!call.sink && call.responseBytes > responseBound) throw new Error("Relay response exceeds bound");
         if (call.sink) {
           if (!call.responseStarted) throw new Error("Relay stream data before response start");
           clearTimeout(call.timer);
