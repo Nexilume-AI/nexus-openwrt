@@ -1952,7 +1952,8 @@ sync_once() {
 	local agent_mcp_path skip_reason='' selected_transport direct_ready=0 relay_ready=0
 	local relay_active active_relay_id active_assignment_id relay_remaining relay_tunnels_up
 	local formal_agent_id runtime_id cloud_mcp_url provisioning_state manifest_digest status_message
-	local registration_output registration_result
+	local registration_output registration_result presence_renewed_at presence_now
+	local sync_presence_state="${SYNC_PRESENCE_STATE:-degraded}"
 	SYNC_PRESENCE_STATE=degraded
 	STATUS_REGISTRATION_HTTP_CODE=0
 	STATUS_REGISTRATION_ERROR_CODE=''
@@ -1995,11 +1996,29 @@ sync_once() {
 		write_status no_cloud_transport "Neither Direct IPv6 nor an active Relay tunnel is available." 0 0 0
 		return 1
 	fi
+	# A full catalog sync can exceed the independent Router presence lease.
+	# Renew sequentially to avoid racing curl_request's files and error state.
+	# Routine refresh does not invalidate the last completed healthy sync.
+	# Startup and failed previous cycles remain degraded until sync succeeds.
+	if ! renew_presence "$sync_presence_state"; then
+		rm -rf "$snapshot_dir"
+		return 1
+	fi
+	presence_renewed_at="$(date +%s)"
 	generation="$(next_generation)" || return 1
 	: >"$new_state"
 	: >"$new_cloud_state"
 	for agent_dir in "$snapshot_dir"/agent-*; do
 		[ -d "$agent_dir" ] || continue
+		presence_now="$(date +%s)"
+		if [ "$((presence_now - presence_renewed_at))" -ge 60 ]; then
+			if ! renew_presence "$sync_presence_state"; then
+				rm -rf "$snapshot_dir"
+				rm -f "$new_state" "$new_cloud_state"
+				return 1
+			fi
+			presence_renewed_at="$(date +%s)"
+		fi
 		origin="$(cat "$agent_dir/origin")"
 		healthy="$(cat "$agent_dir/healthy")"
 		selected="$(select_public_route "$agent_dir/capabilities" "$snapshot_dir/addresses.tsv" || true)"
@@ -2014,6 +2033,7 @@ sync_once() {
 			selected_transport=relay
 		fi
 		if [ "$healthy" != 1 ] || [ -z "$route_id" ] || [ -z "$selected_transport" ] || [ ! -s "$agent_dir/capabilities" ]; then
+			sync_presence_state=degraded
 			skipped=$((skipped + 1))
 			old_id="$(old_id_for_origin "$origin" || true)"
 			[ -z "$old_id" ] || printf '%s\t%s\n' "$old_id" "$origin" >>"$new_state"
@@ -2025,6 +2045,7 @@ sync_once() {
 			agent_mcp_path="$(mcp_path_for_origin "$origin")" || mcp_path_status=$?
 		fi
 		if [ "$mcp_path_status" -ne 0 ]; then
+			sync_presence_state=degraded
 			skipped=$((skipped + 1))
 			if [ "$mcp_path_status" -eq 2 ]; then
 				skip_reason='origin_mcp_path_exceeds_255_bytes'
@@ -2081,6 +2102,7 @@ sync_once() {
 			printf '%s\t%s\n' "$registration_id" "$origin" >>"$new_state"
 			registered=$((registered + 1))
 		else
+			sync_presence_state=degraded
 			STATUS_REGISTRATION_HTTP_CODE="$LAST_HTTP_CODE"
 			STATUS_REGISTRATION_ERROR_CODE="$LAST_ERROR_CODE"
 			manifest_digest="$(cat "$agent_dir/manifest-digest" 2>/dev/null || true)"
@@ -2262,6 +2284,7 @@ main() {
 		if prepare_cloud_runtime; then
 			if sync_once; then
 				if ! renew_presence "${SYNC_PRESENCE_STATE:-online}"; then
+					SYNC_PRESENCE_STATE=degraded
 					write_recoverable_cloud_failure presence_failed "Cloud Router presence renewal failed. Nexus will retry automatically."
 				fi
 			else
@@ -2270,6 +2293,7 @@ main() {
 				fi
 			fi
 		else
+			SYNC_PRESENCE_STATE=degraded
 			# Preserve a degraded Router lease while a recoverable local Relay,
 			# certificate, or Gateway prerequisite is being repaired. A revoked
 			# credential cannot renew Presence and remains explicitly blocked.

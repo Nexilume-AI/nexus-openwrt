@@ -4,7 +4,7 @@
     ".gitattributes": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c",
     ".github/ISSUE_TEMPLATE/bug_report.md": "fa0c182bc29e23ab57a389da79456d5df3439dd782ab46c4c44aff4d3a9a615b",
     ".github/pull_request_template.md": "b87c081c9929c70e145b7c0fe50a5bc741ea0723bc504c6c3f90e296f1958d99",
-    ".github/workflows/ci.yml": "268b3753f57f643f7601bf570337e602db755434d21caface2af4fa2ddcf63f6",
+    ".github/workflows/ci.yml": "a2cd7ac75806781755faa70956170b61c5c20ae87246e7eb33be7159f1f7a068",
     ".gitignore": "e2ccca671ae94b7097a1808674538b7187f13a4e294c5317d584a9294d9fb063",
     ".mailmap": "08f0f037e3a55b8d615df2cf1680ff4a36f709c879a7dc838f6b634f9e9fb0a9",
     "CHANGELOG.md": "9cac69021822d21d27571760d0ac49d69eb4ce72143c624bb691d3417962fe6e",
@@ -296,7 +296,7 @@
     "feed/nexus-agent-services/files/nexus-relayd.init": "ceb7aab0dcd0afeb19df39b25a01e842dac13c8e739d167804ca1d72f6c0ed9c",
     "feed/nexus-agent-services/files/role-runtime.sh": "c624b6fb38bdfb5d4f7ee1440fc756735ff764541f72a7930eff2c4fd90facc7",
     "feed/nexus-agent-services/Makefile": "ac95662f2c7c1b888a9720141b19f1f0afd0a189fd08b9ed42435c38552f5d13",
-    "feed/nexus-cloud-connector/files/nexus-cloud-connectord": "e81a5cd6b2a88b81487241954a80e00a57e91d0afaafa661487414fa2fa15f39",
+    "feed/nexus-cloud-connector/files/nexus-cloud-connectord": "1b2f07e03c380e868af46cd4b4fcc61fab6b59bfbba32237b712cc787653a17c",
     "feed/nexus-cloud-connector/files/nexus-cloud-rpcd": "ae8a7cb63a1b7959f6a2fd74547f05d29e35b4c3ba5aff2d9f7735a44a4a7b65",
     "feed/nexus-cloud-connector/files/nexus-cloud-tls-check": "6a241577d4fff91e8a64d34ec9fa75db6fcfa70e85c2a2e8388eeb6b70ffd92d",
     "feed/nexus-cloud-connector/files/nexus-cloud.config": "32ba897e5ac465d5e9eebc2bcc52e2fa0e3aae765ef0474719dc45b422d05c82",
@@ -386,7 +386,7 @@
     "tests/test_luci_save_apply.py": "c7abd2153fe1e4706f86d03e678b6af85e1a3d51ba9b55124565954cbf077a9b",
     "tests/test_mesh_profile.c": "9979d25ecfc61c2d1a97f1dd07be1ff83877afe8d56b504229ac827978debc38",
     "tests/test_mesh_profile.js": "1f61538470d9f2ba8ed0bb906f45c574dac23913bf5b88463c6853958aeb112a",
-    "tests/test_nexus_cloud_connector_contract.py": "e1a03ddd617ad7fa9058c32e8b162cc4ff0a420dd7f806300c268d2e3c3130b8",
+    "tests/test_nexus_cloud_connector_contract.py": "ff7d1d74545b9d1f6b4635846e21f6be48b9a4ba12512c8721d0e296e915a780",
     "tests/test_nexus_relayd_http2.js": "0d5881b8f34a46d7433a14b71dda86be84971d41dcb5d4af7a03df54335809b7",
     "tests/test_nexus_relayd.js": "335f29ba70ea74ea7cc11ce4c6d260272416538433b8aa77271420364b05b529",
     "tests/test_package_release.py": "108de7eed830f727a35315bc3b9903aed1d070d058c23f90bb5303e91d5134a0",
@@ -415,6 +415,7 @@
     "docs/relay-streaming.md": "58fa4c067a8aea4581df583aaadf53dc84bba5314e4e4ca8eb0a12540a1873da",
     "tests/test_long_relay_stream.c": "88f1ca90668b327590f806e9466bb0d4d4750dbfa658470612225d870b39e17d",
     "tests/test_relay_reconnect.c": "fe3c442d1ae88361d26e587eae61dc6c75256e6d7d0a532411b6b4d1df1013e1",
-    "tests/test_relay_recovery_retry.c": "34d64fb4bdba5886bbb4cf0e0ee8f73486001b9621b4c533f686bee444055c34"
+    "tests/test_relay_recovery_retry.c": "34d64fb4bdba5886bbb4cf0e0ee8f73486001b9621b4c533f686bee444055c34",
+    "tests/test_connector_sync_presence.py": "6e2431499ba3901c4a94d19511568712b07d44b14a598dffa12b6ad273c1daf3"
   }
 }

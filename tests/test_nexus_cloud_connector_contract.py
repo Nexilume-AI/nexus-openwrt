@@ -327,3 +327,11 @@ print("Nexus Cloud connector contract passed")
 # Modern Relay supports the same signed context/mobile stream as Direct IPv6.
 for capability in ("runtime_context_v1", "invoke_interactions_v1", "mcp_stream_v1", "mcp_tasks_v1", "caller_mobile_v1"):
     assert f"json_add_boolean {capability} 0" not in daemon
+
+# Catalog size must not determine the independent Router presence lifetime.
+sync_block = daemon[daemon.index("sync_once() {"):daemon.index("withdraw_all() {")]
+assert sync_block.index('if ! renew_presence "$sync_presence_state"') < sync_block.index('generation="$(next_generation)"')
+loop = sync_block[sync_block.index('for agent_dir in '):]
+assert loop.index('presence_now=') < loop.index('register_agent "$agent_dir"')
+assert 'presence_now - presence_renewed_at' in loop and '-ge 60' in loop
+assert 'if ! renew_presence "$sync_presence_state"' in loop
