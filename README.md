@@ -155,3 +155,7 @@ Nexus-authored source is distributed under [Apache License 2.0 (modified)](LICEN
 ### Licensing conditions
 
 Nexus is licensed under a modified version of the Apache License 2.0, with the following additional conditions. Multi-tenant service operation and removal of existing Nexus UI branding require prior written authorization. Earlier Apache-2.0 grants and third-party licenses remain unchanged. Contributions require explicit agreement permitting commercial use and future relicensing. See [LICENSING.md](LICENSING.md). Authorization contact: **cary.nexilume@outlook.com**.
+
+## Relay model registration
+
+See [Relay model registration](docs/user/en/guides/relay-models.md) for SDK device-code login, `nexus-relay`, automatic credential management and revocation.

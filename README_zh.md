@@ -140,3 +140,7 @@ Nexus 自有代码采用 [Apache License 2.0 (modified)](LICENSE)。第三方组
 ### 许可条件
 
 Nexus 采用 Apache License 2.0 的修改版，并附加以下条件。多租户服务运营及移除现有 Nexus 界面品牌标识须事先取得书面授权。此前的 Apache-2.0 授权和第三方许可证保持不变。贡献者须明确同意允许商业使用及未来重新许可的贡献协议。许可说明：[LICENSING.md](LICENSING.md)。授权联系：**cary.nexilume@outlook.com**。
+
+## Relay 模型注册
+
+参阅 [SDK 设备登录与模型注册](docs/user/zh/guides/relay-models.md)，无需 nexus_cli。
