@@ -7,6 +7,22 @@ An existing outbound Relay transport can continue serving that endpoint.
 
 ## SDK command line (0.52.1+)
 
+### Install from PyPI
+
+SDK 0.52.1 is available on PyPI. In a Linux/OpenWrt virtual environment:
+
+```bash
+python -m pip install -U nexilume
+nexus-relay --version
+nexus-relay --help
+```
+
+The Relay command is included in the dependency-free core; no extra or separate
+CLI package is needed. Use `--index-url https://pypi.org/simple` if a mirror has
+not synchronized yet. The core wheel supports Python 3.9+; building from source
+requires Python 3.10+. Credentials remain in the same private device store when
+the package is upgraded.
+
 ### Install from source
 
 Use Linux/OpenWrt with Python 3.9 or newer and a writable private home directory.

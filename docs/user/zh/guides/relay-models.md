@@ -4,7 +4,21 @@
 SDK 注册的是已运行、带鉴权的 HTTPS 模型接口，不会自动创建模型服务、
 开放入站端口或建立网络隧道。已有 Relay 推理传输可以继续使用。
 
-## 安装
+## 从 PyPI 安装
+
+SDK 0.52.1 已发布到 PyPI。在 Linux/OpenWrt 的虚拟环境中执行：
+
+```bash
+python -m pip install -U nexilume
+nexus-relay --version
+nexus-relay --help
+```
+
+命令包含在 SDK 核心包中，无需安装 extra 或其他 CLI。镜像尚未同步时可加
+`--index-url https://pypi.org/simple`。核心 wheel 支持 Python 3.9+，源码构建需要
+Python 3.10+；升级不会清除已有设备绑定和注册记录。
+
+## 从源码安装
 
 需要 Linux/OpenWrt、Python 3.9+ 和可写的私人用户目录。
 以下从开源仓库安装，不依赖该版本已经发布到 PyPI：
