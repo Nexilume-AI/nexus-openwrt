@@ -99,3 +99,5 @@ requests, and use idle proxy timeouts above 180 seconds. Keep the broker port
 private. Cloud rechecks the device owner, Organization permissions, expiry,
 revocation and Provider state. No provider-specific proxy or shared worker
 secret is required.
+
+After activation commits, Cloud schedules real model health checks before Router availability recovers. Unverified models are never marked healthy. Restart both Web and Worker when deploying this Cloud update.
