@@ -207,3 +207,7 @@ Auto-refresh happens on SDK requests, not in a daemon installed by the CLI.
 For an always-on device, schedule `nexus-relay status` periodically under the
 same OS user (for example every four minutes); stop and request new approval on
 authentication failure. Never log the private store or endpoint credentials.
+
+## Generic outbound transport
+
+SDK 0.53.0 adds streaming forwarding, reconnect and existing Provider adoption. See [Outbound model Relay](outbound-model-relay.md).
